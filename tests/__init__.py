@@ -10,7 +10,6 @@ Test Structure:
     - test_spatial.py: Spatial grid tests
     - test_agent.py: Agent tests
     - test_environment.py: Gymnasium environment tests
-    - test_input_handler.py: Input handler tests
     - test_renderer.py: Renderer tests
     - test_integration.py: End-to-end integration tests
 

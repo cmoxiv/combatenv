@@ -110,7 +110,7 @@ class SpatialGrid:
         for agent in agents:
             self.insert(agent)
 
-    def get_nearby_agents(self, agent, radius: float = None) -> List:
+    def get_nearby_agents(self, agent) -> List:
         """
         Get agents near the given agent.
 
@@ -119,7 +119,6 @@ class SpatialGrid:
 
         Args:
             agent: Agent to query around (must have position attribute)
-            radius: Optional radius for additional filtering (not yet implemented)
 
         Returns:
             List of agents in nearby cells (including the query agent itself)

@@ -74,9 +74,6 @@ from .fov import (
 # Configuration (for advanced users)
 from . import config
 
-# Input handling (for custom game loops)
-from .input_handler import InputHandler
-
 # Renderer (for custom rendering)
 from . import renderer
 
@@ -119,5 +116,4 @@ __all__ = [
     # Modules
     "config",
     "renderer",
-    "InputHandler",
 ]

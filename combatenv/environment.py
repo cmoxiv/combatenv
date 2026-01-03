@@ -382,6 +382,9 @@ class TacticalCombatEnv(gym.Env):
                     agent.take_damage(projectile.damage)
 
                     if was_alive and not agent.is_alive:
+                        # Clear dead agent from FOV cache
+                        get_fov_cache().remove_agent(id(agent))
+
                         if projectile.owner_team == "blue":
                             self.blue_kills += 1
                             kills_this_step['blue'] += 1

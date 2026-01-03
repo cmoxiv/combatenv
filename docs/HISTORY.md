@@ -22,7 +22,6 @@ A Pygame-based grid-world simulation featuring multi-agent systems with field-of
 - **fov.py** - Field-of-view calculation system with team-based visibility
 - **spatial.py** - Spatial grid optimization for efficient collision detection
 - **projectile.py** - Projectile class and factory function
-- **input_handler.py** - Keyboard input handling
 
 ### Entry Point
 - **main.py** - Runs the simulation using TacticalCombatEnv
@@ -35,7 +34,6 @@ A Pygame-based grid-world simulation featuring multi-agent systems with field-of
 - **test_fov.py** - FOV calculation tests
 - **test_spatial.py** - Spatial grid tests
 - **test_renderer.py** - Renderer tests
-- **test_input_handler.py** - Input handler tests
 - **test_integration.py** - End-to-end integration tests
 
 ### Documentation (`docs/`)

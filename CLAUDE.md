@@ -55,9 +55,8 @@ pip install pygame numpy gymnasium
 │   ├── fov.py           # Field of view calculations
 │   ├── spatial.py       # Spatial grid optimization
 │   ├── terrain.py       # TerrainType enum and TerrainGrid
-│   ├── renderer.py      # All rendering functions
-│   └── input_handler.py # Keyboard input handling
-├── tests/               # Test suite (190 tests)
+│   └── renderer.py      # All rendering functions
+├── tests/               # Test suite (183 tests)
 │   ├── __init__.py
 │   ├── test_agent.py
 │   ├── test_environment.py
@@ -66,7 +65,6 @@ pip install pygame numpy gymnasium
 │   ├── test_fov.py
 │   ├── test_spatial.py
 │   ├── test_renderer.py
-│   ├── test_input_handler.py
 │   └── test_integration.py
 └── docs/                # Documentation
     ├── README.md        # User-facing documentation
@@ -111,9 +109,6 @@ from combatenv import (
 from combatenv import config
 GRID_SIZE = config.GRID_SIZE
 PROJECTILE_DAMAGE = config.PROJECTILE_DAMAGE
-
-# Input handling
-from combatenv import InputHandler
 
 # Renderer (usually not needed directly)
 from combatenv import renderer

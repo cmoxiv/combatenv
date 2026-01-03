@@ -250,9 +250,8 @@ Movement penalty:
 │   ├── fov.py           # Field of view calculations
 │   ├── spatial.py       # Spatial grid optimization
 │   ├── terrain.py       # Terrain types and grid
-│   ├── renderer.py      # All rendering functions
-│   └── input_handler.py # Keyboard input handling
-├── tests/               # Test suite (190 tests)
+│   └── renderer.py      # All rendering functions
+├── tests/               # Test suite (183 tests)
 │   ├── test_agent.py
 │   ├── test_environment.py
 │   ├── test_terrain.py

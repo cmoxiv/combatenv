@@ -55,7 +55,6 @@ combatenv/
 ├── fov.py             # Field of view calculations
 ├── spatial.py         # SpatialGrid for collision optimization
 ├── renderer.py        # Pygame rendering functions
-├── input_handler.py   # Keyboard input handling
 └── config.py          # All configuration constants
 ```
 
@@ -104,7 +103,6 @@ combatenv/
 | `projectile.py` | Projectile entity | `Projectile`, `create_projectile()` |
 | `renderer.py` | All rendering functions | `render_all()`, `render_debug_overlay()` |
 | `environment.py` | Gymnasium environment | `TacticalCombatEnv`, `EnvConfig` |
-| `input_handler.py` | Keyboard handling | `InputHandler` |
 
 ## Environment Step Flow
 

@@ -155,6 +155,16 @@ TERRAIN_FIRE_PCT = 0.02         # 2% of grid
 TERRAIN_SWAMP_PCT = 0.03        # 3% of grid
 TERRAIN_WATER_PCT = 0.03        # 3% of grid
 
+# Validate terrain percentages don't exceed safe limits
+_total_terrain_pct = (TERRAIN_BUILDING_PCT + TERRAIN_FIRE_PCT +
+                      TERRAIN_SWAMP_PCT + TERRAIN_WATER_PCT)
+if _total_terrain_pct > 0.5:
+    import warnings
+    warnings.warn(
+        f"Total terrain coverage {_total_terrain_pct:.1%} exceeds 50%, "
+        "may cause agent spawning failures"
+    )
+
 # Terrain Colors (RGB)
 COLOR_BUILDING = (64, 64, 64)   # Dark gray
 COLOR_FIRE = (255, 100, 0)      # Orange
