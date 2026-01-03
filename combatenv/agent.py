@@ -1,0 +1,969 @@
+"""
+Agent class for the Grid-World Multi-Agent Tactical Simulation.
+
+This module defines the Agent entity with comprehensive movement, combat, and
+resource management systems. Agents are autonomous team-based entities (blue/red)
+that navigate, detect enemies, and engage in tactical combat within the grid world.
+
+Agent Capabilities:
+    - Movement: Forward/backward translation, left/right rotation
+    - Collision Detection: Boundary avoidance, agent-to-agent collision
+    - Autonomous Behavior: Random wandering with boundary awareness
+    - Combat: Target detection via two-layer FOV, projectile shooting
+    - Resource Management: Stamina, armor, and ammunition systems
+
+Resource Systems:
+    Stamina:
+        - Maximum: 100 points
+        - Drain: 15/sec while moving
+        - Regeneration: 20/sec idle, 5/sec while moving (net -10/sec moving)
+        - Low Stamina Penalty: 50% speed reduction below 20 stamina
+
+    Armor:
+        - Maximum: 100 points
+        - Depleting resource (no regeneration)
+        - Absorbs damage before health
+
+    Ammunition:
+        - Reserve: 1000 rounds total
+        - Magazine: 30 rounds per magazine
+        - Reload Time: 2.0 seconds
+        - Auto-reload: Triggers when magazine empties
+
+Combat Mechanics:
+    - Two-layer FOV for target detection
+    - Near FOV (3 cells, 90 deg): 90% base accuracy
+    - Far FOV (5 cells, 120 deg): 50% base accuracy
+    - Movement penalty: 50% accuracy reduction while moving
+    - Shoot cooldown: 0.5 seconds between shots
+
+Coordinate System:
+    - Position: (x, y) in grid cells, can be fractional
+    - Orientation: Degrees, 0=right/east, 90=down/south, 180=left/west, 270=up/north
+
+Example:
+    >>> from agent import Agent, spawn_all_teams
+    >>> blue, red = spawn_all_teams()
+    >>> agent = blue[0]
+    >>> print(f"Agent at {agent.position}, facing {agent.orientation} degrees")
+    >>> agent.move_forward(dt=0.016)  # Move for one frame at 60 FPS
+"""
+
+import random
+import math
+from typing import Tuple, Literal, List, Optional
+from dataclasses import dataclass
+
+from .config import (
+    GRID_SIZE,
+    AGENT_MOVE_SPEED,
+    AGENT_ROTATION_SPEED,
+    WANDER_DIRECTION_CHANGE,
+    NUM_AGENTS_PER_TEAM,
+    BOUNDARY_MARGIN,
+    BOUNDARY_DETECTION_THRESHOLD,
+    AGENT_SPAWN_SPACING,
+    AGENT_COLLISION_RADIUS,
+    AGENT_MAX_HEALTH,
+    SHOOT_COOLDOWN,
+    NEAR_FOV_RANGE,
+    NEAR_FOV_ANGLE,
+    NEAR_FOV_ACCURACY,
+    FAR_FOV_RANGE,
+    FAR_FOV_ANGLE,
+    FAR_FOV_ACCURACY,
+    AGENT_MAX_STAMINA,
+    STAMINA_REGEN_RATE_IDLE,
+    STAMINA_REGEN_RATE_MOVING,
+    STAMINA_DRAIN_RATE,
+    LOW_STAMINA_THRESHOLD,
+    MOVEMENT_SPEED_PENALTY_LOW_STAMINA,
+    AGENT_MAX_ARMOR,
+    AGENT_MAX_AMMO,
+    MAGAZINE_SIZE,
+    RELOAD_TIME,
+    AUTO_RELOAD_ON_EMPTY
+)
+
+
+TeamType = Literal["blue", "red"]
+
+
+@dataclass
+class Agent:
+    """
+    Represents an agent in the grid-world environment.
+
+    Attributes:
+        position: (x, y) coordinates in grid space (can be fractional for smooth movement)
+        orientation: Angle in degrees (0-360), where 0 = right/east, 90 = down/south
+        team: Team affiliation ("blue" or "red")
+        wander_direction: Internal state for autonomous wandering (1=forward, -1=backward, 0=rotating)
+        health: Current health points (dies at 0)
+        shoot_cooldown: Seconds until can shoot again
+    """
+    position: Tuple[float, float]
+    orientation: float
+    team: TeamType
+    wander_direction: int = 1  # Internal state for wandering behavior
+    health: int = AGENT_MAX_HEALTH
+    shoot_cooldown: float = 0.0
+    # Resource management attributes
+    stamina: float = AGENT_MAX_STAMINA
+    armor: int = AGENT_MAX_ARMOR
+    ammo_reserve: int = AGENT_MAX_AMMO
+    magazine_ammo: int = MAGAZINE_SIZE
+    reload_timer: float = 0.0
+    # Terrain effects
+    stuck_steps: int = 0  # Steps remaining until freed from swamp
+
+    def __post_init__(self):
+        """Normalize orientation to 0-360 range on initialization."""
+        self.orientation = self.orientation % 360
+
+    def move_forward(self, speed: float = AGENT_MOVE_SPEED, dt: float = 1.0, other_agents: Optional[List['Agent']] = None, terrain_grid=None) -> bool:
+        """
+        Move the agent forward in the direction of its orientation.
+
+        Args:
+            speed: Distance to move in grid cells per second
+            dt: Delta time in seconds (defaults to 1.0 for backward compatibility)
+            other_agents: List of other agents to check for collisions (optional)
+            terrain_grid: TerrainGrid for building collision checks (optional)
+
+        Returns:
+            True if movement succeeded, False if blocked by collision
+        """
+        # Apply stamina penalty at low stamina
+        actual_speed = speed
+        if self.has_low_stamina:
+            actual_speed *= MOVEMENT_SPEED_PENALTY_LOW_STAMINA
+
+        # Convert orientation to radians (pygame coordinate system)
+        rad = math.radians(self.orientation)
+        dx = math.cos(rad) * actual_speed * dt
+        dy = math.sin(rad) * actual_speed * dt
+
+        new_x = self.position[0] + dx
+        new_y = self.position[1] + dy
+
+        # Apply boundary collision detection
+        new_x = max(BOUNDARY_MARGIN, min(GRID_SIZE - BOUNDARY_MARGIN, new_x))
+        new_y = max(BOUNDARY_MARGIN, min(GRID_SIZE - BOUNDARY_MARGIN, new_y))
+
+        # Check collision with buildings (terrain)
+        if terrain_grid:
+            new_cell_x = math.floor(new_x)
+            new_cell_y = math.floor(new_y)
+            if not terrain_grid.is_walkable(new_cell_x, new_cell_y):
+                return False  # Movement blocked by building
+
+        # Check collision with other agents (optional)
+        if other_agents:
+            for other in other_agents:
+                if other is self:
+                    continue
+                # Dead agents are not obstacles (can walk through corpses)
+                if not other.is_alive:
+                    continue
+                dist = math.sqrt((new_x - other.position[0])**2 + (new_y - other.position[1])**2)
+                if dist < AGENT_COLLISION_RADIUS:
+                    return False  # Movement blocked
+
+        self.position = (new_x, new_y)
+        return True
+
+    def move_backward(self, speed: float = AGENT_MOVE_SPEED, dt: float = 1.0, other_agents: Optional[List['Agent']] = None, terrain_grid=None) -> bool:
+        """
+        Move the agent backward (opposite to its orientation).
+
+        Backward movement is 1/4 the speed of forward movement.
+
+        Args:
+            speed: Base speed in grid cells per second (will be reduced to 1/4)
+            dt: Delta time in seconds (defaults to 1.0 for backward compatibility)
+            other_agents: List of other agents to check for collisions (optional)
+            terrain_grid: TerrainGrid for building collision checks (optional)
+
+        Returns:
+            True if movement succeeded, False if blocked by collision
+        """
+        return self.move_forward(-speed * 0.25, dt, other_agents, terrain_grid)
+
+    def rotate_left(self, degrees: float = AGENT_ROTATION_SPEED, dt: float = 1.0) -> None:
+        """
+        Rotate the agent counter-clockwise.
+
+        Args:
+            degrees: Rotation amount in degrees per second
+            dt: Delta time in seconds (defaults to 1.0 for backward compatibility)
+        """
+        self.orientation = (self.orientation - degrees * dt) % 360
+
+    def rotate_right(self, degrees: float = AGENT_ROTATION_SPEED, dt: float = 1.0) -> None:
+        """
+        Rotate the agent clockwise.
+
+        Args:
+            degrees: Rotation amount in degrees per second
+            dt: Delta time in seconds (defaults to 1.0 for backward compatibility)
+        """
+        self.orientation = (self.orientation + degrees * dt) % 360
+
+    def is_at_boundary(self, threshold: float = BOUNDARY_DETECTION_THRESHOLD) -> bool:
+        """
+        Check if the agent is near a boundary.
+
+        Args:
+            threshold: Distance from boundary to consider "at boundary"
+
+        Returns:
+            True if agent is within threshold distance of any boundary
+        """
+        x, y = self.position
+        return (x <= threshold or x >= GRID_SIZE - threshold or
+                y <= threshold or y >= GRID_SIZE - threshold)
+
+    def is_facing_boundary(self) -> bool:
+        """
+        Check if the agent is facing toward a boundary.
+
+        Uses ±45° tolerance around cardinal directions:
+        - Left (180°): facing between 135-225°
+        - Right (0°): facing between 315-45°
+        - Top (270°): facing between 225-315°
+        - Bottom (90°): facing between 45-135°
+
+        For corners, checks if facing into the corner (either direction).
+
+        Returns:
+            True if agent's orientation points toward the boundary they're near
+        """
+        if not self.is_at_boundary():
+            return False
+
+        x, y = self.position
+
+        # Check for corners first (both boundaries matter)
+        in_top_left = (x <= BOUNDARY_DETECTION_THRESHOLD and
+                       y <= BOUNDARY_DETECTION_THRESHOLD)
+        in_top_right = (x >= GRID_SIZE - BOUNDARY_DETECTION_THRESHOLD and
+                        y <= BOUNDARY_DETECTION_THRESHOLD)
+        in_bottom_left = (x <= BOUNDARY_DETECTION_THRESHOLD and
+                          y >= GRID_SIZE - BOUNDARY_DETECTION_THRESHOLD)
+        in_bottom_right = (x >= GRID_SIZE - BOUNDARY_DETECTION_THRESHOLD and
+                           y >= GRID_SIZE - BOUNDARY_DETECTION_THRESHOLD)
+
+        if in_top_left:
+            # Facing into corner: left (135-225) or up (225-315)
+            return (135 <= self.orientation <= 315)
+        elif in_top_right:
+            # Facing into corner: right (315-360 or 0-45) or up (225-315)
+            return (self.orientation >= 225) or (self.orientation <= 45)
+        elif in_bottom_left:
+            # Facing into corner: left (135-225) or down (45-135)
+            return (45 <= self.orientation <= 225)
+        elif in_bottom_right:
+            # Facing into corner: right (315-360 or 0-45) or down (45-135)
+            return (self.orientation <= 135) or (self.orientation >= 315)
+
+        # Single boundary checks (not in a corner)
+        if x <= BOUNDARY_DETECTION_THRESHOLD:  # Near left boundary
+            # Facing left: orientation between 135-225° (±45° from 180°)
+            return 135 <= self.orientation <= 225
+        elif x >= GRID_SIZE - BOUNDARY_DETECTION_THRESHOLD:  # Near right boundary
+            # Facing right: orientation between 315-45° (±45° from 0°/360°)
+            return self.orientation >= 315 or self.orientation <= 45
+        elif y <= BOUNDARY_DETECTION_THRESHOLD:  # Near top boundary
+            # Facing up: orientation between 225-315° (±45° from 270°)
+            return 225 <= self.orientation <= 315
+        elif y >= GRID_SIZE - BOUNDARY_DETECTION_THRESHOLD:  # Near bottom boundary
+            # Facing down: orientation between 45-135° (±45° from 90°)
+            return 45 <= self.orientation <= 135
+
+        return False
+
+    def wander(self, dt: float = 1.0, other_agents: Optional[List['Agent']] = None, terrain_grid=None) -> None:
+        """
+        Autonomous wandering behavior for the agent.
+
+        Simple random walk with occasional direction changes:
+        - Mostly moves forward
+        - Randomly changes rotation direction
+        - Turns away from boundaries (only if facing them)
+
+        This method is designed to be easily replaceable with RL policies.
+
+        Args:
+            dt: Delta time in seconds (defaults to 1.0 for backward compatibility)
+            other_agents: List of other agents to check for collisions (optional)
+            terrain_grid: TerrainGrid for building collision checks (optional)
+        """
+        # If at boundary AND facing it, turn away
+        if self.is_facing_boundary():
+            x, y = self.position
+
+            # Determine which boundary we're near and turn appropriately
+            if x <= BOUNDARY_DETECTION_THRESHOLD:  # Near left boundary
+                target_angle = 0  # Face right
+            elif x >= GRID_SIZE - BOUNDARY_DETECTION_THRESHOLD:  # Near right boundary
+                target_angle = 180  # Face left
+            elif y <= BOUNDARY_DETECTION_THRESHOLD:  # Near top boundary
+                target_angle = 90  # Face down
+            elif y >= GRID_SIZE - BOUNDARY_DETECTION_THRESHOLD:  # Near bottom boundary
+                target_angle = 270  # Face up
+            else:
+                target_angle = self.orientation
+
+            # Rotate towards the target angle
+            angle_diff = (target_angle - self.orientation + 180) % 360 - 180
+            rotation_amount = AGENT_ROTATION_SPEED * dt
+            if abs(angle_diff) > rotation_amount:
+                if angle_diff > 0:
+                    self.rotate_right(dt=dt)
+                else:
+                    self.rotate_left(dt=dt)
+            else:
+                self.orientation = target_angle
+
+            return
+
+        # Random direction changes
+        if random.random() < WANDER_DIRECTION_CHANGE:
+            action = random.choice(['forward', 'left', 'right', 'backward'])
+
+            if action == 'forward':
+                self.wander_direction = 1
+            elif action == 'backward':
+                self.wander_direction = -1
+            elif action == 'left':
+                # Immediate rotation (frame-rate independent)
+                rotation_amount = random.uniform(30, 60)
+                self.orientation = (self.orientation - rotation_amount) % 360
+            else:  # right
+                # Immediate rotation (frame-rate independent)
+                rotation_amount = random.uniform(30, 60)
+                self.orientation = (self.orientation + rotation_amount) % 360
+
+        # Execute current wandering direction
+        if self.wander_direction > 0:
+            self.move_forward(dt=dt, other_agents=other_agents, terrain_grid=terrain_grid)
+        elif self.wander_direction < 0:
+            self.move_backward(dt=dt, other_agents=other_agents, terrain_grid=terrain_grid)
+
+    def get_grid_position(self) -> Tuple[int, int]:
+        """
+        Get the integer grid cell coordinates of the agent.
+
+        Uses floor division to ensure correct cell assignment for all positions,
+        including boundary cases at exactly cell edges (e.g., 10.0 -> cell 10).
+
+        Returns:
+            (x, y) grid cell coordinates as integers
+        """
+        return (math.floor(self.position[0]), math.floor(self.position[1]))
+
+    @property
+    def is_alive(self) -> bool:
+        """Check if agent is alive (health > 0)."""
+        return self.health > 0
+
+    @property
+    def is_moving(self) -> bool:
+        """Check if agent is currently moving (not just rotating)."""
+        return self.wander_direction != 0
+
+    @property
+    def is_reloading(self) -> bool:
+        """Check if agent is currently reloading."""
+        return self.reload_timer > 0.0
+
+    @property
+    def has_low_stamina(self) -> bool:
+        """Check if agent has critically low stamina."""
+        return self.stamina < LOW_STAMINA_THRESHOLD
+
+    @property
+    def is_stuck(self) -> bool:
+        """Check if agent is stuck in swamp terrain."""
+        return self.stuck_steps > 0
+
+    def update_stuck(self) -> None:
+        """Decrement stuck timer by one step."""
+        if self.stuck_steps > 0:
+            self.stuck_steps -= 1
+
+    def apply_terrain_damage(self, damage: int) -> None:
+        """
+        Apply damage that bypasses armor (e.g., from fire terrain).
+
+        Args:
+            damage: Amount of damage to apply directly to health
+
+        Raises:
+            ValueError: If damage is negative
+        """
+        if damage < 0:
+            raise ValueError(f"Damage must be non-negative, got {damage}")
+        self.health = max(0, self.health - damage)
+
+    def take_damage(self, damage: int) -> None:
+        """
+        Apply damage to agent (armor first, then health).
+
+        Args:
+            damage: Amount of damage to apply
+
+        Raises:
+            ValueError: If damage is negative
+        """
+        if damage < 0:
+            raise ValueError(f"Damage must be non-negative, got {damage}")
+
+        # Armor absorbs damage first
+        if self.armor > 0:
+            armor_damage = min(damage, self.armor)
+            self.armor -= armor_damage
+            damage -= armor_damage
+
+        # Remaining damage goes to health
+        if damage > 0:
+            self.health = max(0, self.health - damage)
+
+    def update_cooldown(self, dt: float) -> None:
+        """
+        Update shooting cooldown timer.
+
+        Args:
+            dt: Delta time in seconds
+        """
+        if self.shoot_cooldown > 0:
+            self.shoot_cooldown = max(0, self.shoot_cooldown - dt)
+
+    def can_shoot(self) -> bool:
+        """Check if agent can shoot (alive, not on cooldown, has ammo, not reloading)."""
+        return (
+            self.is_alive and
+            self.shoot_cooldown <= 0 and
+            self.magazine_ammo > 0 and
+            not self.is_reloading
+        )
+
+    def get_targets_in_fov(self, potential_targets: List['Agent'], terrain_grid=None) -> Tuple[List['Agent'], List['Agent']]:
+        """
+        Get targets visible in near and far FOV layers.
+
+        Args:
+            potential_targets: List of agents to check visibility for
+            terrain_grid: TerrainGrid for LOS blocking by buildings (optional)
+
+        Returns:
+            Tuple of (near_targets, far_targets)
+            - near_targets: Enemies in near FOV (high accuracy)
+            - far_targets: Enemies in far FOV only (low accuracy)
+        """
+        from .fov import is_agent_visible_to_agent
+
+        near_targets = []
+        far_targets = []
+
+        for target in potential_targets:
+            # Don't target self
+            if target is self:
+                continue
+
+            # Don't target dead agents
+            if not target.is_alive:
+                continue
+
+            # Check near FOV first
+            if is_agent_visible_to_agent(
+                self, target,
+                fov_angle=NEAR_FOV_ANGLE,
+                max_range=NEAR_FOV_RANGE,
+                terrain_grid=terrain_grid
+            ):
+                near_targets.append(target)
+            # Then check far FOV (only if not in near)
+            elif is_agent_visible_to_agent(
+                self, target,
+                fov_angle=FAR_FOV_ANGLE,
+                max_range=FAR_FOV_RANGE,
+                terrain_grid=terrain_grid
+            ):
+                far_targets.append(target)
+
+        return near_targets, far_targets
+
+    def shoot_at_target(self, target: 'Agent', accuracy: float):
+        """
+        Create a projectile aimed at a target.
+
+        Args:
+            target: Agent to shoot at
+            accuracy: Accuracy value (0.0-1.0) from FOV layer
+
+        Returns:
+            Projectile aimed at target, or None if out of ammo
+        """
+        # Consume ammo (includes auto-reload logic)
+        if not self.consume_ammo():
+            return None
+
+        from .projectile import create_projectile
+
+        # Calculate angle to target
+        dx = target.position[0] - self.position[0]
+        dy = target.position[1] - self.position[1]
+        angle_to_target = math.degrees(math.atan2(dy, dx))
+
+        # Turn agent to face target
+        self.orientation = angle_to_target
+
+        # Create projectile with accuracy modifier
+        projectile = create_projectile(
+            shooter_position=self.position,
+            shooter_orientation=angle_to_target,
+            shooter_team=self.team,
+            shooter_id=id(self),
+            accuracy=accuracy
+        )
+
+        # Reset cooldown
+        self.shoot_cooldown = SHOOT_COOLDOWN
+
+        return projectile
+
+    def update_stamina(self, dt: float, is_moving: bool) -> None:
+        """
+        Update stamina based on movement state.
+
+        Args:
+            dt: Delta time in seconds
+            is_moving: Whether agent moved this frame
+        """
+        if is_moving:
+            # Drain stamina while moving
+            self.stamina -= STAMINA_DRAIN_RATE * dt
+            # Regenerate at slower rate while moving
+            self.stamina += STAMINA_REGEN_RATE_MOVING * dt
+        else:
+            # Regenerate at full rate when idle
+            self.stamina += STAMINA_REGEN_RATE_IDLE * dt
+
+        # Clamp to valid range
+        self.stamina = max(0.0, min(AGENT_MAX_STAMINA, self.stamina))
+
+    def update_reload(self, dt: float) -> None:
+        """
+        Update reload timer and complete reload when ready.
+
+        Args:
+            dt: Delta time in seconds
+        """
+        if self.reload_timer > 0:
+            self.reload_timer = max(0.0, self.reload_timer - dt)
+
+            # Reload completes
+            if self.reload_timer == 0.0:
+                # Transfer ammo from reserve to magazine
+                ammo_to_load = min(MAGAZINE_SIZE, self.ammo_reserve)
+                self.magazine_ammo = ammo_to_load
+                self.ammo_reserve -= ammo_to_load
+
+    def start_reload(self) -> bool:
+        """
+        Start reloading if conditions are met.
+
+        Returns:
+            True if reload started, False if cannot reload
+        """
+        # Cannot reload if already reloading
+        if self.is_reloading:
+            return False
+
+        # Cannot reload if no ammo in reserve
+        if self.ammo_reserve <= 0:
+            return False
+
+        # Cannot reload if magazine already full
+        if self.magazine_ammo >= MAGAZINE_SIZE:
+            return False
+
+        # Start reload
+        self.reload_timer = RELOAD_TIME
+        return True
+
+    def consume_ammo(self) -> bool:
+        """
+        Consume one round of ammo when firing.
+
+        Returns:
+            True if ammo consumed, False if out of ammo
+        """
+        if self.magazine_ammo > 0:
+            self.magazine_ammo -= 1
+
+            # Auto-reload if magazine empty
+            if self.magazine_ammo == 0 and AUTO_RELOAD_ON_EMPTY and self.ammo_reserve > 0:
+                self.start_reload()
+
+            return True
+        return False
+
+    def respawn(self) -> None:
+        """
+        Respawn agent at team spawn location with full resources.
+
+        Resets health, stamina, armor, ammo and moves agent to a random
+        position within their team's spawn quadrant.
+        """
+        # Reset resources
+        self.health = AGENT_MAX_HEALTH
+        self.stamina = AGENT_MAX_STAMINA
+        self.armor = AGENT_MAX_ARMOR
+        self.ammo_reserve = AGENT_MAX_AMMO
+        self.magazine_ammo = MAGAZINE_SIZE
+        self.reload_timer = 0.0
+        self.shoot_cooldown = 0.0
+        self.stuck_steps = 0
+
+        # Move to spawn quadrant (use BOUNDARY_MARGIN for consistency)
+        margin = BOUNDARY_MARGIN * 4  # Keep away from edges
+        if self.team == "blue":
+            x = random.uniform(margin, GRID_SIZE // 2 - margin)
+            y = random.uniform(margin, GRID_SIZE // 2 - margin)
+        else:
+            x = random.uniform(GRID_SIZE // 2 + margin, GRID_SIZE - margin)
+            y = random.uniform(GRID_SIZE // 2 + margin, GRID_SIZE - margin)
+
+        self.position = (x, y)
+        self.orientation = random.uniform(0, 360)
+        self.wander_direction = 1
+
+
+def try_shoot_at_visible_target(
+    agent: 'Agent',
+    nearby_agents: List['Agent'],
+    near_accuracy: float = NEAR_FOV_ACCURACY,
+    far_accuracy: float = FAR_FOV_ACCURACY,
+    movement_penalty: float = 0.5,
+    terrain_grid=None
+) -> Optional[object]:
+    """
+    Attempt to shoot at the nearest visible enemy target.
+
+    Checks both near and far FOV layers, preferring near targets for higher accuracy.
+    Applies movement accuracy penalty if the agent is moving.
+
+    Args:
+        agent: The shooting agent
+        nearby_agents: List of nearby agents to check for targets (from spatial grid)
+        near_accuracy: Base accuracy for near FOV targets
+        far_accuracy: Base accuracy for far FOV targets
+        movement_penalty: Accuracy multiplier when agent is moving
+        terrain_grid: TerrainGrid for LOS blocking by buildings (optional)
+
+    Returns:
+        Projectile if shot was fired, None otherwise
+    """
+    if not agent.can_shoot():
+        return None
+
+    # Get targets in FOV
+    near_targets, far_targets = agent.get_targets_in_fov(nearby_agents, terrain_grid)
+
+    # Prefer near targets (higher accuracy)
+    if near_targets:
+        target = min(near_targets, key=lambda t: (
+            (t.position[0] - agent.position[0])**2 +
+            (t.position[1] - agent.position[1])**2
+        ))
+        accuracy = near_accuracy
+    elif far_targets:
+        target = min(far_targets, key=lambda t: (
+            (t.position[0] - agent.position[0])**2 +
+            (t.position[1] - agent.position[1])**2
+        ))
+        accuracy = far_accuracy
+    else:
+        return None
+
+    # Apply movement accuracy penalty
+    if agent.is_moving:
+        accuracy *= movement_penalty
+
+    return agent.shoot_at_target(target, accuracy)
+
+
+def spawn_team(team: TeamType, num_agents: int = NUM_AGENTS_PER_TEAM, terrain_grid=None) -> List['Agent']:
+    """
+    Spawn a team of agents in their designated quadrant.
+
+    Blue team spawns in top-left quadrant, red team in bottom-right quadrant.
+    Agents are positioned in a loose cluster with random orientations.
+    Agents only spawn on empty terrain blocks.
+
+    Args:
+        team: Team identifier ("blue" or "red")
+        num_agents: Number of agents to spawn
+        terrain_grid: TerrainGrid to check for valid spawn positions (optional)
+
+    Returns:
+        List of Agent instances
+    """
+    agents = []
+    occupied_positions = set()
+
+    # Define spawn quadrants (with margins to avoid boundaries)
+    margin = 2.0  # Keep away from edges
+    if team == "blue":
+        # Top-left quadrant
+        x_min, x_max = margin, GRID_SIZE // 2 - margin
+        y_min, y_max = margin, GRID_SIZE // 2 - margin
+    else:  # red
+        # Bottom-right quadrant
+        x_min, x_max = GRID_SIZE // 2 + margin, GRID_SIZE - margin
+        y_min, y_max = GRID_SIZE // 2 + margin, GRID_SIZE - margin
+
+    # Spawn agents with no overlap
+    attempts = 0
+    max_attempts = 5000  # Increased for terrain checks
+
+    while len(agents) < num_agents and attempts < max_attempts:
+        attempts += 1
+
+        # Random position within quadrant
+        x = random.uniform(x_min, x_max)
+        y = random.uniform(y_min, y_max)
+
+        # Check terrain - only spawn on empty/walkable terrain
+        if terrain_grid:
+            cell_x, cell_y = int(x), int(y)
+            from .terrain import TerrainType
+            terrain = terrain_grid.get(cell_x, cell_y)
+            if terrain != TerrainType.EMPTY:
+                continue  # Skip non-empty terrain
+
+        # Check for overlap with existing agents (using AGENT_SPAWN_SPACING)
+        too_close = False
+        for existing_agent in agents:
+            dist = math.sqrt((x - existing_agent.position[0])**2 + (y - existing_agent.position[1])**2)
+            if dist < AGENT_SPAWN_SPACING:
+                too_close = True
+                break
+
+        if not too_close:
+            # Random initial orientation
+            orientation = random.uniform(0, 360)
+
+            agent = Agent(
+                position=(x, y),
+                orientation=orientation,
+                team=team
+            )
+
+            agents.append(agent)
+            grid_pos = (int(x), int(y))
+            occupied_positions.add(grid_pos)
+
+    if len(agents) < num_agents:
+        raise RuntimeError(
+            f"Failed to spawn {num_agents} agents for {team} team "
+            f"(only spawned {len(agents)}). Try increasing spawn area or reducing agent count."
+        )
+
+    return agents
+
+
+def spawn_all_teams(terrain_grid=None) -> Tuple[List['Agent'], List['Agent']]:
+    """
+    Spawn both blue and red teams.
+
+    Args:
+        terrain_grid: TerrainGrid to check for valid spawn positions (optional)
+
+    Returns:
+        Tuple of (blue_agents, red_agents)
+    """
+    blue_agents = spawn_team("blue", terrain_grid=terrain_grid)
+    red_agents = spawn_team("red", terrain_grid=terrain_grid)
+
+    return blue_agents, red_agents
+
+
+if __name__ == "__main__":
+    """Basic self-tests for agent module."""
+    import sys
+
+    def test_agent_creation():
+        """Test basic agent creation."""
+        agent = Agent(
+            position=(5.0, 5.0),
+            orientation=45.0,
+            team="blue"
+        )
+
+        assert agent.position == (5.0, 5.0)
+        assert agent.orientation == 45.0
+        assert agent.team == "blue"
+        assert agent.health == AGENT_MAX_HEALTH
+        assert agent.is_alive == True
+        print("  agent creation: OK")
+
+    def test_agent_movement():
+        """Test agent movement."""
+        agent = Agent(
+            position=(32.0, 32.0),
+            orientation=0.0,  # Facing right
+            team="blue"
+        )
+
+        initial_x = agent.position[0]
+        agent.move_forward(dt=0.1)
+
+        assert agent.position[0] > initial_x, "Should move right"
+        print("  agent movement: OK")
+
+    def test_agent_rotation():
+        """Test agent rotation."""
+        agent = Agent(
+            position=(5.0, 5.0),
+            orientation=0.0,
+            team="blue"
+        )
+
+        agent.rotate_right(degrees=90, dt=1.0)
+        assert agent.orientation == 90.0
+
+        agent.rotate_left(degrees=45, dt=1.0)
+        assert agent.orientation == 45.0
+        print("  agent rotation: OK")
+
+    def test_agent_damage():
+        """Test damage and armor system."""
+        agent = Agent(
+            position=(5.0, 5.0),
+            orientation=0.0,
+            team="blue"
+        )
+
+        initial_armor = agent.armor
+        initial_health = agent.health
+
+        # Damage should hit armor first
+        agent.take_damage(50)
+        assert agent.armor < initial_armor, "Armor should absorb damage"
+        assert agent.health == initial_health, "Health unchanged if armor absorbs all"
+
+        # Damage exceeding armor hits health
+        agent.armor = 10
+        agent.take_damage(50)
+        assert agent.armor == 0, "Armor depleted"
+        assert agent.health < initial_health, "Health should take remaining damage"
+        print("  agent damage: OK")
+
+    def test_terrain_damage():
+        """Test terrain damage bypasses armor."""
+        agent = Agent(
+            position=(5.0, 5.0),
+            orientation=0.0,
+            team="blue"
+        )
+
+        initial_health = agent.health
+        initial_armor = agent.armor
+
+        agent.apply_terrain_damage(10)
+
+        assert agent.armor == initial_armor, "Terrain damage should not affect armor"
+        assert agent.health == initial_health - 10, "Health should take full damage"
+        print("  terrain damage: OK")
+
+    def test_agent_stuck():
+        """Test stuck state for swamp."""
+        agent = Agent(
+            position=(5.0, 5.0),
+            orientation=0.0,
+            team="blue"
+        )
+
+        assert agent.is_stuck == False
+
+        agent.stuck_steps = 30
+        assert agent.is_stuck == True
+
+        agent.update_stuck()
+        assert agent.stuck_steps == 29
+        print("  agent stuck: OK")
+
+    def test_spawn_team():
+        """Test team spawning."""
+        agents = spawn_team("blue", num_agents=10)
+
+        assert len(agents) == 10
+        for agent in agents:
+            assert agent.team == "blue"
+            assert agent.is_alive == True
+        print("  spawn_team: OK")
+
+    def test_can_shoot():
+        """Test shooting capability check."""
+        agent = Agent(
+            position=(5.0, 5.0),
+            orientation=0.0,
+            team="blue"
+        )
+
+        # Fresh agent should be able to shoot
+        assert agent.can_shoot() == True
+
+        # On cooldown
+        agent.shoot_cooldown = 0.5
+        assert agent.can_shoot() == False
+
+        # No ammo
+        agent.shoot_cooldown = 0.0
+        agent.magazine_ammo = 0
+        assert agent.can_shoot() == False
+        print("  can_shoot: OK")
+
+    def test_respawn():
+        """Test agent respawn."""
+        agent = Agent(
+            position=(5.0, 5.0),
+            orientation=0.0,
+            team="blue"
+        )
+
+        # Simulate death
+        agent.health = 0
+        agent.stamina = 0
+        agent.armor = 0
+        agent.stuck_steps = 50
+
+        agent.respawn()
+
+        assert agent.health == AGENT_MAX_HEALTH
+        assert agent.stamina == AGENT_MAX_STAMINA
+        assert agent.armor == AGENT_MAX_ARMOR
+        assert agent.stuck_steps == 0
+        print("  respawn: OK")
+
+    # Run all tests
+    print("Running agent.py self-tests...")
+    try:
+        test_agent_creation()
+        test_agent_movement()
+        test_agent_rotation()
+        test_agent_damage()
+        test_terrain_damage()
+        test_agent_stuck()
+        test_spawn_team()
+        test_can_shoot()
+        test_respawn()
+        print("All agent.py self-tests passed!")
+        sys.exit(0)
+    except AssertionError as e:
+        print(f"FAILED: {e}")
+        sys.exit(1)
