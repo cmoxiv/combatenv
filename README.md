@@ -2,6 +2,8 @@
 
 A 2D tactical combat simulation environment for AI testing, built with Python and Pygame. Gymnasium-compatible for reinforcement learning research.
 
+![Simulation Demo](docs/media/simulation.gif)
+
 ## Features
 
 - **Gymnasium API**: Standard `reset()`, `step()`, `render()`, `close()` interface compatible with RL libraries
