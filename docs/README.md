@@ -2,6 +2,8 @@
 
 A Pygame-based tactical combat simulation featuring 200 autonomous agents engaged in team-based combat within a 64x64 grid world. Built as a Gymnasium-compatible reinforcement learning environment.
 
+![Simulation Demo](media/simulation.gif)
+
 ## Table of Contents
 
 - [Overview](#overview)
@@ -267,23 +269,129 @@ Movement penalty:
 
 ## Configuration
 
-All game parameters are centralized in `combatenv/config.py`. Key settings:
+All game parameters are centralized in `combatenv/config.py`. This module allows customization of game mechanics, visuals, and performance without code changes.
 
-### Display
-- `WINDOW_SIZE`: 1024 pixels
-- `CELL_SIZE`: 16 pixels (64x64 grid)
-- `FPS`: 60 frames per second
+### Units
+- **Distances**: Grid cells (1 cell = `CELL_SIZE` pixels)
+- **Speeds**: Grid cells per second
+- **Angles**: Degrees
+- **Times**: Seconds
+- **Alpha values**: 0-255 (higher = more opaque)
 
-### Agents
-- `NUM_AGENTS_PER_TEAM`: 100
-- `AGENT_MOVE_SPEED`: 3.0 cells/second
-- `AGENT_ROTATION_SPEED`: 180 degrees/second
+### Window and Grid
 
-### Combat
-- `NEAR_FOV_RANGE`: 3.0 cells
-- `FAR_FOV_RANGE`: 5.0 cells
-- `PROJECTILE_SPEED`: 15.0 cells/second
-- `PROJECTILE_DAMAGE`: 25 HP
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `WINDOW_SIZE` | 1024 | Window resolution in pixels |
+| `CELL_SIZE` | 16 | Size of each grid cell in pixels |
+| `GRID_SIZE` | 64 | Derived: `WINDOW_SIZE / CELL_SIZE` |
+| `FPS` | 60 | Target frames per second |
+
+### Agent Configuration
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `NUM_AGENTS_PER_TEAM` | 100 | Number of agents per team |
+| `AGENT_SIZE_RATIO` | 0.7 | Agent circle size as % of cell |
+| `AGENT_NOSE_RATIO` | 0.4 | Nose line length as % of cell |
+
+### Movement
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `AGENT_MOVE_SPEED` | 3.0 | Grid cells per second |
+| `AGENT_ROTATION_SPEED` | 180.0 | Degrees per second |
+| `WANDER_DIRECTION_CHANGE` | 0.02 | Probability of direction change per frame |
+
+### Boundary and Collision
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `BOUNDARY_MARGIN` | 0.5 | Minimum distance from grid edge |
+| `BOUNDARY_DETECTION_THRESHOLD` | 1.0 | Distance to trigger boundary avoidance |
+| `AGENT_SPAWN_SPACING` | 1.0 | Minimum spacing between spawned agents |
+| `AGENT_COLLISION_RADIUS` | 0.8 | Minimum separation distance |
+
+### Combat - FOV Layers
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `NEAR_FOV_RANGE` | 3.0 | Near FOV range in cells |
+| `NEAR_FOV_ANGLE` | 90.0 | Near FOV cone angle in degrees |
+| `NEAR_FOV_ACCURACY` | 0.99 | 99% accuracy in near FOV |
+| `FAR_FOV_RANGE` | 5.0 | Far FOV range in cells |
+| `FAR_FOV_ANGLE` | 120.0 | Far FOV cone angle in degrees |
+| `FAR_FOV_ACCURACY` | 0.80 | 80% accuracy in far FOV |
+| `MOVEMENT_ACCURACY_PENALTY` | 0.5 | Accuracy multiplier when moving |
+
+### Combat - Projectiles
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `PROJECTILE_SPEED` | 15.0 | Grid cells per second |
+| `PROJECTILE_DAMAGE` | 25 | HP damage per hit |
+| `PROJECTILE_RANGE` | 10.0 | Max distance (2x far FOV range) |
+| `PROJECTILE_LIFETIME` | 0.67 | Derived: range / speed |
+| `PROJECTILE_RADIUS` | 0.3 | Collision detection radius |
+
+### Combat - Agent
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `AGENT_MAX_HEALTH` | 100 | Maximum health points |
+| `SHOOT_COOLDOWN` | 0.5 | Seconds between shots |
+| `FRIENDLY_FIRE_ENABLED` | True | Allow friendly fire |
+| `MUZZLE_FLASH_LIFETIME` | 0.1 | Seconds flash is visible |
+| `RESPAWN_DELAY_SECONDS` | 1.0 | Delay before respawn |
+
+### Resource Management - Stamina
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `AGENT_MAX_STAMINA` | 100.0 | Maximum stamina points |
+| `STAMINA_REGEN_RATE_IDLE` | 20.0 | Regen per second when idle |
+| `STAMINA_REGEN_RATE_MOVING` | 5.0 | Regen per second when moving |
+| `STAMINA_DRAIN_RATE` | 15.0 | Drain per second of movement |
+| `LOW_STAMINA_THRESHOLD` | 20.0 | Threshold for speed penalty |
+| `MOVEMENT_SPEED_PENALTY_LOW_STAMINA` | 0.5 | Speed multiplier at low stamina |
+
+### Resource Management - Armor and Ammo
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `AGENT_MAX_ARMOR` | 100 | Maximum armor points |
+| `ARMOR_REGEN_RATE` | 0.0 | No regeneration (depleting) |
+| `AGENT_MAX_AMMO` | 1000 | Total ammo reserve |
+| `MAGAZINE_SIZE` | 30 | Rounds per magazine |
+| `RELOAD_TIME` | 2.0 | Seconds to reload |
+| `AUTO_RELOAD_ON_EMPTY` | True | Auto-reload when empty |
+
+### Terrain
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `FIRE_DAMAGE_PER_STEP` | 2 | HP per step in fire (bypasses armor) |
+| `SWAMP_STUCK_MIN_STEPS` | 30 | Min steps stuck (~0.5 sec) |
+| `SWAMP_STUCK_MAX_STEPS` | 90 | Max steps stuck (~1.5 sec) |
+| `TERRAIN_BUILDING_PCT` | 0.05 | 5% of grid |
+| `TERRAIN_FIRE_PCT` | 0.02 | 2% of grid |
+| `TERRAIN_SWAMP_PCT` | 0.03 | 3% of grid |
+| `TERRAIN_WATER_PCT` | 0.03 | 3% of grid |
+
+### Colors
+
+Colors are defined as RGB tuples. Key color constants:
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `COLOR_BACKGROUND` | (255, 255, 255) | White background |
+| `COLOR_BLUE_TEAM` | (0, 0, 255) | Blue team agents |
+| `COLOR_RED_TEAM` | (255, 0, 0) | Red team agents |
+| `COLOR_DEAD_AGENT` | (128, 128, 128) | Gray for dead agents |
+| `COLOR_BUILDING` | (64, 64, 64) | Dark gray buildings |
+| `COLOR_FIRE` | (255, 100, 0) | Orange fire |
+| `COLOR_SWAMP` | (0, 100, 50) | Dark green swamp |
+| `COLOR_WATER` | (0, 100, 200) | Blue water |
 
 See `docs/API.md` for complete configuration reference.
 
@@ -331,6 +439,55 @@ Press **` (backtick)** to toggle the debug overlay (on by default), showing:
 ### FOV Overlay
 
 Press **F** to toggle the FOV visualization (on by default). Disabling FOV overlay can improve performance when not needed for debugging.
+
+## Change Log
+
+### v0.1.1 (2026-01-02)
+
+**Phase 9: Documentation**
+- Moved all documentation to `docs/` directory
+- Created comprehensive API reference
+- Added architecture documentation
+
+**Phase 8: Package Structure**
+- Organized code as `combatenv` package with public API
+- Added `__init__.py` with clean exports
+- Created comprehensive test suite (190 tests)
+
+**Phase 7: Gymnasium Environment**
+- Created `TacticalCombatEnv` with standard Gymnasium API
+- Defined observation space (50 dimensions) and action space
+- Implemented reward function and termination conditions
+
+**Phase 6: Terrain System**
+- Added TerrainType enum (EMPTY, BUILDING, FIRE, SWAMP, WATER)
+- Implemented terrain effects (fire damage, swamp stuck)
+- Integrated terrain with line-of-sight blocking
+
+**Phase 5: Combat System**
+- Created Projectile class with accuracy deviation
+- Implemented damage system with armor/health
+- Added shooting cooldowns and reload mechanics
+
+**Phase 4: Field of View System**
+- Implemented two-layer FOV (near: 3 cells/90°, far: 5 cells/120°)
+- Created team-based FOV aggregation
+- Added overlap detection for contested areas
+
+**Phase 3: Spatial Optimization**
+- Implemented SpatialGrid for spatial hashing
+- Reduced collision checks from O(n²) to O(n)
+
+**Phase 2: Multi-Agent System**
+- Created Agent class with position, orientation, team
+- Implemented wandering behavior with collision detection
+- Team-based spawning (100 blue, 100 red)
+
+**Phase 1: Foundation**
+- Basic Pygame application with 60 FPS game loop
+- Window management and event handling
+
+See `HISTORY.md` for complete development history and architectural decisions.
 
 ## License
 
