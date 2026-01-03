@@ -707,7 +707,7 @@ def render_keybindings_overlay(surface: pygame.Surface) -> None:
 
         # Define keybindings
         keybindings = [
-            ("ESC", "Exit game"),
+            ("Shift+Q", "Exit game"),
             ("`", "Toggle debug info"),
             ("F", "Toggle FOV overlay"),
             ("?", "Toggle this help"),

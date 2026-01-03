@@ -46,6 +46,7 @@ pip install pygame numpy gymnasium
 ```
 /Users/mo/Projects/tmp/
 ├── main.py              # Entry point - runs the simulation
+├── map_editor.py        # Standalone map editor for custom terrain
 ├── combatenv/           # Main package
 │   ├── __init__.py      # Package exports (public API)
 │   ├── environment.py   # TacticalCombatEnv (Gymnasium env)
@@ -55,8 +56,9 @@ pip install pygame numpy gymnasium
 │   ├── fov.py           # Field of view calculations
 │   ├── spatial.py       # Spatial grid optimization
 │   ├── terrain.py       # TerrainType enum and TerrainGrid
-│   └── renderer.py      # All rendering functions
-├── tests/               # Test suite (183 tests)
+│   ├── renderer.py      # All rendering functions
+│   └── map_io.py        # Save/load maps to JSON
+├── tests/               # Test suite (193 tests)
 │   ├── __init__.py
 │   ├── test_agent.py
 │   ├── test_environment.py
@@ -65,6 +67,7 @@ pip install pygame numpy gymnasium
 │   ├── test_fov.py
 │   ├── test_spatial.py
 │   ├── test_renderer.py
+│   ├── test_map_io.py
 │   └── test_integration.py
 └── docs/                # Documentation
     ├── README.md        # User-facing documentation
@@ -90,6 +93,9 @@ from combatenv import Agent, spawn_team, spawn_all_teams
 
 # Terrain system
 from combatenv import TerrainType, TerrainGrid
+
+# Map I/O (save/load custom maps)
+from combatenv import save_map, load_map
 
 # Projectiles
 from combatenv import Projectile, create_projectile
@@ -155,7 +161,7 @@ Comprehensive documentation is available in `docs/`:
 
 ## Controls
 
-- **ESC**: Exit simulation
+- **Q (Shift+Q)**: Exit simulation
 - **` (backtick)**: Toggle debug overlay (on by default)
 - **F**: Toggle FOV overlay (on by default)
 - **? (Shift+/)**: Toggle keybindings help

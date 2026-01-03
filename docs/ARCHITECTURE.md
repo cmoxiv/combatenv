@@ -55,6 +55,7 @@ combatenv/
 ├── fov.py             # Field of view calculations
 ├── spatial.py         # SpatialGrid for collision optimization
 ├── renderer.py        # Pygame rendering functions
+├── map_io.py          # Save/load maps to JSON
 └── config.py          # All configuration constants
 ```
 

@@ -73,7 +73,7 @@ class EnvConfig:
     max_steps: Optional[int] = 1000
     terminate_on_team_elimination: bool = True
     terminate_on_controlled_death: bool = True
-    allow_escape_exit: bool = True  # Allow ESC key to exit simulation
+    allow_escape_exit: bool = True  # Allow Shift+Q to exit simulation
 ```
 
 #### Spaces
@@ -113,7 +113,7 @@ Clean up resources.
 ##### `process_events() -> bool`
 Process pygame events (window close, keyboard input).
 
-**Returns:** True if simulation should continue, False if user requested exit (ESC or window close)
+**Returns:** True if simulation should continue, False if user requested exit (Shift+Q or window close)
 
 **Note:** This method respects the `allow_escape_exit` option in EnvConfig. In headless mode (render_mode=None), always returns True.
 

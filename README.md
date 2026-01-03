@@ -74,7 +74,7 @@ env.close()
 
 | Key | Action |
 |-----|--------|
-| ESC | Exit simulation |
+| Shift+Q | Exit simulation |
 | ` (backtick) | Toggle debug overlay |
 | F | Toggle FOV overlay |
 | ? (Shift+/) | Toggle keybindings help |

@@ -36,10 +36,12 @@ Functions:
     spawn_team: Spawn a team of agents
     spawn_all_teams: Spawn both blue and red teams
     create_projectile: Factory function for projectiles
+    save_map: Save a terrain grid to JSON file
+    load_map: Load a terrain grid from JSON file
 """
 
 # Version
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 # Core environment
 from .environment import TacticalCombatEnv, EnvConfig, OBS_SIZE
@@ -49,6 +51,9 @@ from .agent import Agent, spawn_team, spawn_all_teams
 
 # Terrain system
 from .terrain import TerrainType, TerrainGrid
+
+# Map I/O
+from .map_io import save_map, load_map
 
 # Projectile system
 from .projectile import Projectile, create_projectile
@@ -92,6 +97,10 @@ __all__ = [
     # Terrain
     "TerrainType",
     "TerrainGrid",
+
+    # Map I/O
+    "save_map",
+    "load_map",
 
     # Projectiles
     "Projectile",

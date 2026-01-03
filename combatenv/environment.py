@@ -176,7 +176,8 @@ class TacticalCombatEnv(gym.Env):
 
         Args:
             seed: Random seed for reproducibility
-            options: Additional reset options
+            options: Additional reset options:
+                - terrain_grid: Pre-made TerrainGrid to use instead of random generation
 
         Returns:
             Tuple of (observation, info)
@@ -191,18 +192,21 @@ class TacticalCombatEnv(gym.Env):
             random.seed(seed)
             np.random.seed(seed)
 
-        # Initialize terrain grid and generate random terrain
-        self.terrain_grid = TerrainGrid(GRID_SIZE, GRID_SIZE)
-        terrain_rng = random.Random()
-        if seed is not None:
-            terrain_rng.seed(seed)
-        self.terrain_grid.generate_random(
-            building_pct=TERRAIN_BUILDING_PCT,
-            fire_pct=TERRAIN_FIRE_PCT,
-            swamp_pct=TERRAIN_SWAMP_PCT,
-            water_pct=TERRAIN_WATER_PCT,
-            rng=terrain_rng
-        )
+        # Initialize terrain grid (use provided or generate random)
+        if options and "terrain_grid" in options:
+            self.terrain_grid = options["terrain_grid"]
+        else:
+            self.terrain_grid = TerrainGrid(GRID_SIZE, GRID_SIZE)
+            terrain_rng = random.Random()
+            if seed is not None:
+                terrain_rng.seed(seed)
+            self.terrain_grid.generate_random(
+                building_pct=TERRAIN_BUILDING_PCT,
+                fire_pct=TERRAIN_FIRE_PCT,
+                swamp_pct=TERRAIN_SWAMP_PCT,
+                water_pct=TERRAIN_WATER_PCT,
+                rng=terrain_rng
+            )
 
         # Spawn agents (only on empty terrain)
         self.blue_agents, self.red_agents = spawn_all_teams(terrain_grid=self.terrain_grid)
@@ -623,7 +627,7 @@ class TacticalCombatEnv(gym.Env):
         Args:
             event: The pygame KEYDOWN event
         """
-        if event.key == pygame.K_ESCAPE:
+        if event.key == pygame.K_q and (event.mod & pygame.KMOD_SHIFT):
             if self.config.allow_escape_exit:
                 self._user_quit = True
         elif event.key == pygame.K_BACKQUOTE:

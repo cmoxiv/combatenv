@@ -35,7 +35,7 @@ def main():
             if event.type == pygame.QUIT:
                 running = False
             elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
+                if event.key == pygame.K_q and (event.mod & pygame.KMOD_SHIFT):
                     running = False
 
         # Update game state (agent movement/logic)

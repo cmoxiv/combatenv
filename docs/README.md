@@ -192,7 +192,7 @@ agent = Agent(position=(10.0, 10.0), orientation=45.0, team="blue")
 
 | Key | Action |
 |-----|--------|
-| **ESC** | Exit simulation |
+| **Shift+Q** | Exit simulation |
 | **` (backtick)** | Toggle debug overlay (on by default) |
 | **F** | Toggle FOV overlay (on by default) |
 | **? (Shift+/)** | Toggle keybindings help |
@@ -241,6 +241,7 @@ Movement penalty:
 ```
 /project/
 ├── main.py              # Entry point - runs the simulation
+├── map_editor.py        # Standalone map editor for custom terrain
 ├── combatenv/           # Main package
 │   ├── __init__.py      # Package exports
 │   ├── environment.py   # TacticalCombatEnv (Gymnasium env)
@@ -250,8 +251,9 @@ Movement penalty:
 │   ├── fov.py           # Field of view calculations
 │   ├── spatial.py       # Spatial grid optimization
 │   ├── terrain.py       # Terrain types and grid
-│   └── renderer.py      # All rendering functions
-├── tests/               # Test suite (183 tests)
+│   ├── renderer.py      # All rendering functions
+│   └── map_io.py        # Save/load maps to JSON
+├── tests/               # Test suite (193 tests)
 │   ├── test_agent.py
 │   ├── test_environment.py
 │   ├── test_terrain.py
