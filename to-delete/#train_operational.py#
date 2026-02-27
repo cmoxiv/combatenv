@@ -1,0 +1,479 @@
+"""
+Operational-level Q-learning training script.
+
+Trains units to navigate using waypoints with reward shaping.
+
+State space: 432 states per unit
+Action space: 19 actions (hold, waypoints, dispatch, stances)
+
+Features:
+- Shared Q-table across all units for faster learning
+- N-table for UCB exploration bonus
+- Reward shaping for waypoint navigation
+- Save/load for resuming training or demo
+
+Usage:
+    # Train for 500 episodes
+    python train_operational.py --episodes 500
+
+    # Resume training from checkpoint
+    python train_operational.py --load operational_agent.pkl --episodes 500
+
+    # Run demo with trained agent
+    python train_operational.py --load operational_agent.pkl --demo
+
+    # Train with rendering (slow)
+    python train_operational.py --episodes 100 --render
+"""
+
+import argparse
+import pickle
+import numpy as np
+from collections import defaultdict
+from typing import Dict, Any, Optional
+
+from combatenv import TacticalCombatEnv, EnvConfig
+from combatenv.wrappers import (
+    OperationalWrapper,
+    OperationalTrainingWrapper,
+    OperationalDiscreteObsWrapper,
+    OperationalDiscreteActionWrapper,
+    CombatSuppressionWrapper,
+)
+
+
+class SharedQLearningAgent:
+    """
+    Q-learning agent with UCB exploration bonus.
+
+    Uses a shared Q-table across all units and N-table for
+    count-based exploration (UCB1 algorithm).
+
+    Attributes:
+        n_states: Number of discrete states
+        n_actions: Number of discrete actions
+        q_table: State-action values
+        n_table: State-action visit counts
+        lr: Learning rate
+        gamma: Discount factor
+        exploration_bonus: UCB coefficient
+    """
+
+    def __init__(
+        self,
+        n_states: int,
+        n_actions: int,
+        learning_rate: float = 0.1,
+        discount_factor: float = 0.95,
+        exploration_bonus: float = 1.0,
+    ):
+        self.n_states = n_states
+        self.n_actions = n_actions
+        self.lr = learning_rate
+        self.gamma = discount_factor
+        self.exploration_bonus = exploration_bonus
+
+        # Q-table: state -> action -> value
+        self.q_table: Dict[int, np.ndarray] = defaultdict(
+            lambda: np.zeros(n_actions)
+        )
+
+        # N-table: state -> action -> visit count
+        self.n_table: Dict[int, np.ndarray] = defaultdict(
+            lambda: np.zeros(n_actions)
+        )
+
+        # Total steps for UCB calculation
+        self.total_steps = 0
+
+    def select_action(self, state: int, training: bool = True) -> int:
+        """
+        Select action using UCB exploration during training.
+
+        UCB1: Q(s,a) + c * sqrt(log(N) / N(s,a))
+
+        Args:
+            state: Discrete state index
+            training: Whether to use exploration
+
+        Returns:
+            Selected action index
+        """
+        if not training:
+            # Greedy action selection
+            return int(np.argmax(self.q_table[state]))
+
+        # UCB action selection
+        q_values = self.q_table[state]
+        n_values = self.n_table[state]
+
+        # Avoid division by zero
+        n_values_safe = n_values + 1e-6
+
+        # UCB bonus: c * sqrt(log(t) / N(s,a))
+        if self.total_steps > 0:
+            ucb_bonus = self.exploration_bonus * np.sqrt(
+                np.log(self.total_steps + 1) / n_values_safe
+            )
+        else:
+            ucb_bonus = self.exploration_bonus * np.ones(self.n_actions)
+
+        # Select action with highest Q + UCB
+        ucb_values = q_values + ucb_bonus
+        return int(np.argmax(ucb_values))
+
+    def update(
+        self,
+        state: int,
+        action: int,
+        reward: float,
+        next_state: int,
+        done: bool,
+    ) -> float:
+        """
+        Update Q-value using standard Q-learning.
+
+        Args:
+            state: Current state
+            action: Action taken
+            reward: Reward received
+            next_state: Next state
+            done: Whether episode ended
+
+        Returns:
+            TD error
+        """
+        # Increment visit count
+        self.n_table[state][action] += 1
+        self.total_steps += 1
+
+        # Q-learning update
+        current_q = self.q_table[state][action]
+
+        if done:
+            target = reward
+        else:
+            target = reward + self.gamma * np.max(self.q_table[next_state])
+
+        td_error = target - current_q
+        self.q_table[state][action] += self.lr * td_error
+
+        return td_error
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get agent statistics."""
+        return {
+            "total_steps": self.total_steps,
+            "unique_states": len(self.q_table),
+            "avg_q_value": np.mean([q.mean() for q in self.q_table.values()]) if self.q_table else 0,
+            "max_q_value": np.max([q.max() for q in self.q_table.values()]) if self.q_table else 0,
+        }
+
+    def save(self, filepath: str):
+        """
+        Save agent to file.
+
+        Args:
+            filepath: Path to save file
+        """
+        data = {
+            "q_table": dict(self.q_table),
+            "n_table": dict(self.n_table),
+            "total_steps": self.total_steps,
+            "params": {
+                "n_states": self.n_states,
+                "n_actions": self.n_actions,
+                "lr": self.lr,
+                "gamma": self.gamma,
+                "exploration_bonus": self.exploration_bonus,
+            },
+        }
+        with open(filepath, "wb") as f:
+            pickle.dump(data, f)
+        print(f"Saved agent to {filepath}")
+
+    def load(self, filepath: str):
+        """
+        Load agent from file.
+
+        Args:
+            filepath: Path to load file
+        """
+        with open(filepath, "rb") as f:
+            data = pickle.load(f)
+
+        # Restore Q-table
+        self.q_table = defaultdict(lambda: np.zeros(self.n_actions))
+        for state, values in data["q_table"].items():
+            self.q_table[state] = values
+
+        # Restore N-table
+        self.n_table = defaultdict(lambda: np.zeros(self.n_actions))
+        for state, values in data["n_table"].items():
+            self.n_table[state] = values
+
+        self.total_steps = data.get("total_steps", 0)
+
+        # Restore params if available
+        params = data.get("params", {})
+        if params:
+            self.lr = params.get("lr", self.lr)
+            self.gamma = params.get("gamma", self.gamma)
+            self.exploration_bonus = params.get("exploration_bonus", self.exploration_bonus)
+
+        print(f"Loaded agent from {filepath}")
+        print(f"  Total steps: {self.total_steps}")
+        print(f"  Unique states: {len(self.q_table)}")
+
+
+def create_env(render: bool = False, disable_combat: bool = False):
+    """
+    Create operational-level training environment.
+
+    Args:
+        render: Whether to render
+        disable_combat: Whether to disable shooting/damage
+
+    Returns:
+        Wrapped environment
+    """
+    render_mode = "human" if render else None
+    config = EnvConfig(max_steps=200)
+
+    env = TacticalCombatEnv(render_mode=render_mode, config=config)
+
+    # Add combat suppression if combat disabled
+
+    # import combatenv.wrappers as wrappers
+    # wrappers.ActionMaskWrapper
+    
+    if disable_combat:
+        env = CombatSuppressionWrapper(env, disable_shooting=True)
+
+    env = OperationalWrapper(env)
+    env = OperationalTrainingWrapper(env, team="blue")
+    env = OperationalDiscreteObsWrapper(env, team="blue")
+    env = OperationalDiscreteActionWrapper(env, team="blue")
+
+    return env
+
+
+def train(
+        episodes: int = 500,
+        render: bool = False,
+        save_interval: int = 100,
+        log_interval: int = 10,
+        resume_from: Optional[str] = None,
+        disable_combat: bool = False,
+):
+    """
+    Train operational Q-learning agent.
+
+    Args:
+        episodes: Number of training episodes
+        render: Whether to render during training
+        save_interval: Save checkpoint every N episodes
+        log_interval: Log progress every N episodes
+        resume_from: Path to load existing agent
+        disable_combat: Whether to disable shooting/damage
+
+    Returns:
+        Trained agent
+    """
+    env = create_env(render=render, disable_combat=disable_combat)
+
+    # Create or load agent
+    agent = SharedQLearningAgent(
+        n_states=env.n_states,
+        n_actions=env.n_actions,
+        learning_rate=0.1,
+        discount_factor=0.95,
+        exploration_bonus=1.0,
+    )
+
+    if resume_from:
+        agent.load(resume_from)
+
+    print(f"Training operational RL agent")
+    print(f"  States: {env.n_states}")
+    print(f"  Actions: {env.n_actions}")
+    print(f"  Episodes: {episodes}")
+    if resume_from:
+        print(f"  Resumed from: {resume_from}")
+        print()
+
+    # Training metrics
+    episode_rewards = []
+    episode_lengths = []
+    waypoints_reached = []
+
+    for episode in range(episodes):
+        obs, info = env.reset(seed=episode)
+        total_reward = 0
+        steps = 0
+        reached_waypoint = False
+
+        done = False
+        while not done:
+            # Select actions for all units (shared policy)
+            actions = {}
+            for unit_id, state in obs.items():
+                actions[unit_id] = agent.select_action(state, training=True)
+
+            # Step environment
+            next_obs, rewards, terminated, truncated, info = env.step(actions)
+            done = terminated or truncated
+
+            # Update Q-values for each unit
+            for unit_id in obs.keys():
+                if unit_id in next_obs:
+                    next_state = next_obs[unit_id]
+                else:
+                    next_state = 0  # Terminal state
+
+                reward = rewards.get(unit_id, 0.0)
+                agent.update(
+                    state=obs[unit_id],
+                    action=actions[unit_id],
+                    reward=reward,
+                    next_state=next_state,
+                    done=done,
+                )
+                total_reward += reward
+
+                # Check if waypoint reached (reward > 10 indicates arrival bonus)
+                if reward > 9.0:
+                    reached_waypoint = True
+
+            obs = next_obs
+            steps += 1
+
+            # Render if enabled
+            if render:
+                env.render()
+                if not env.unwrapped.process_events():
+                    print("User quit")
+                    env.close()
+                    return agent
+
+        # Track metrics
+        episode_rewards.append(total_reward)
+        episode_lengths.append(steps)
+        waypoints_reached.append(reached_waypoint)
+
+        # Log progress
+        if (episode + 1) % log_interval == 0:
+            avg_reward = np.mean(episode_rewards[-log_interval:])
+            avg_length = np.mean(episode_lengths[-log_interval:])
+            wp_rate = np.mean(waypoints_reached[-log_interval:]) * 100
+            stats = agent.get_stats()
+            print(
+                f"Episode {episode + 1:4d} | "
+                f"Reward: {avg_reward:7.2f} | "
+                f"Length: {avg_length:5.1f} | "
+                f"WP%: {wp_rate:5.1f} | "
+                f"States: {stats['unique_states']:3d}"
+            )
+
+        # Save checkpoint
+        if (episode + 1) % save_interval == 0:
+            agent.save(f"operational_agent_ep{episode + 1}.pkl")
+
+    env.close()
+
+    # Final save
+    agent.save("operational_agent.pkl")
+
+    # Print summary
+    print()
+    print("Training complete!")
+    stats = agent.get_stats()
+    print(f"  Total steps: {stats['total_steps']}")
+    print(f"  Unique states: {stats['unique_states']}")
+    print(f"  Avg reward (last 100): {np.mean(episode_rewards[-100:]):.2f}")
+    print(f"  Waypoint reach rate (last 100): {np.mean(waypoints_reached[-100:]) * 100:.1f}%")
+
+    return agent
+
+
+def demo(agent_path: str, episodes: int = 5):
+    """
+    Run demo with trained agent.
+
+    Args:
+        agent_path: Path to saved agent
+        episodes: Number of demo episodes
+    """
+    env = create_env(render=True)
+
+    agent = SharedQLearningAgent(
+        n_states=env.n_states,
+        n_actions=env.n_actions,
+    )
+    agent.load(agent_path)
+
+    print(f"\nRunning demo for {episodes} episodes...")
+    print("Press Q to exit\n")
+
+    total_rewards = []
+
+    for episode in range(episodes):
+        obs, info = env.reset(seed=episode + 10000)
+        episode_reward = 0
+
+        done = False
+        while not done:
+            # Greedy action selection (no exploration)
+            actions = {}
+            for unit_id, state in obs.items():
+                actions[unit_id] = agent.select_action(state, training=False)
+
+            obs, rewards, terminated, truncated, info = env.step(actions)
+            done = terminated or truncated
+
+            episode_reward += sum(rewards.values())
+
+            env.render()
+            if not env.unwrapped.process_events():
+                print("User quit")
+                env.close()
+                return
+
+        total_rewards.append(episode_reward)
+        print(f"  Episode {episode + 1}: Reward = {episode_reward:.2f}")
+
+    env.close()
+
+    print(f"\nDemo avg reward: {np.mean(total_rewards):.2f}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Train operational RL agent")
+    parser.add_argument("--episodes", type=int, default=500, help="Training episodes")
+    parser.add_argument("--render", action="store_true", help="Render during training")
+    parser.add_argument("--demo", action="store_true", help="Run demo mode")
+    parser.add_argument("--load", type=str, help="Load existing agent")
+    parser.add_argument("--save-interval", type=int, default=100, help="Save checkpoint interval")
+    parser.add_argument("--log-interval", type=int, default=10, help="Log progress interval")
+    parser.add_argument("--no-combat", action="store_true", help="Disable shooting/damage for navigation training")
+
+    args = parser.parse_args()
+
+    if args.demo:
+        if not args.load:
+            print("Error: --demo requires --load <agent_path>")
+            return
+        demo(args.load, episodes=5)
+    else:
+        train(
+            episodes=args.episodes,
+            render=args.render,
+            save_interval=args.save_interval,
+            log_interval=args.log_interval,
+            resume_from=args.load,
+            disable_combat=args.no_combat,
+        )
+
+
+if __name__ == "__main__":
+    main()

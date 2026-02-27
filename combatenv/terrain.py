@@ -2,18 +2,20 @@
 Terrain system for the Grid-World Multi-Agent Tactical Simulation.
 
 This module provides terrain types that affect agent movement, visibility,
-and combat. Each grid cell can contain one terrain type.
+and combat. Terrain is stored at pixel level (1024x1024) for organic shapes,
+with cell-level API (64x64) for backward compatibility.
 
 Terrain Types:
     - EMPTY: Normal traversable terrain with no effects
-    - BUILDING: Blocks movement and line of sight
+    - OBSTACLE: Blocks movement and line of sight (mountains)
     - FIRE: Causes damage that bypasses armor
-    - SWAMP: Traps agents for a random number of steps
+    - FOREST: Slows agents by 50%, reduces enemy detection range
+    - WATER: Slows agents, prevents shooting, grants invisibility
 
 Example:
     >>> from terrain import TerrainType, TerrainGrid
     >>> grid = TerrainGrid(64, 64)
-    >>> grid.generate_random(building_pct=0.05, fire_pct=0.02, swamp_pct=0.03)
+    >>> grid.generate_random()
     >>> grid.is_walkable(10, 10)
     True
 """
@@ -27,23 +29,26 @@ import random
 class TerrainType(IntEnum):
     """Enumeration of terrain types."""
     EMPTY = 0
-    BUILDING = 1
+    OBSTACLE = 1
     FIRE = 2
-    SWAMP = 3
+    FOREST = 3
     WATER = 4
 
 
 class TerrainGrid:
     """
-    Grid-based terrain storage and query system.
+    Pixel-level terrain storage with cell-level API.
 
-    Stores terrain types for each cell in the simulation grid and provides
-    efficient queries for movement and visibility checks.
+    Internal storage is at pixel resolution (width*CELL_SIZE x height*CELL_SIZE).
+    Cell-level methods (get, set, is_walkable, blocks_los) use majority voting
+    over the 16x16 pixel block for each cell.
 
     Attributes:
-        width: Grid width in cells
-        height: Grid height in cells
-        grid: 2D numpy array of terrain types
+        width: Grid width in cells (e.g. 64)
+        height: Grid height in cells (e.g. 64)
+        pixel_width: Grid width in pixels (e.g. 1024)
+        pixel_height: Grid height in pixels (e.g. 1024)
+        grid: 2D numpy array of terrain types at pixel resolution
     """
 
     def __init__(self, width: int, height: int):
@@ -54,28 +59,62 @@ class TerrainGrid:
             width: Grid width in cells
             height: Grid height in cells
         """
+        from combatenv.config import CELL_SIZE
+
         self.width = width
         self.height = height
-        self.grid = np.zeros((width, height), dtype=np.int8)
+        self.cell_size = CELL_SIZE
+        self.pixel_width = width * CELL_SIZE
+        self.pixel_height = height * CELL_SIZE
+        self.grid = np.zeros((self.pixel_width, self.pixel_height), dtype=np.int8)
+        self._surface_dirty = True
+
+    # ── Pixel-level methods ─────────────────────────────────────────────
+
+    def get_pixel(self, px: int, py: int) -> TerrainType:
+        """
+        Get terrain type at a specific pixel.
+
+        Args:
+            px: Pixel x coordinate
+            py: Pixel y coordinate
+
+        Returns:
+            TerrainType at the pixel, or EMPTY if out of bounds
+        """
+        if 0 <= px < self.pixel_width and 0 <= py < self.pixel_height:
+            return TerrainType(self.grid[px, py])
+        return TerrainType.EMPTY
+
+    def set_pixel(self, px: int, py: int, terrain: TerrainType) -> None:
+        """
+        Set terrain type at a specific pixel.
+
+        Args:
+            px: Pixel x coordinate
+            py: Pixel y coordinate
+            terrain: TerrainType to set
+        """
+        if 0 <= px < self.pixel_width and 0 <= py < self.pixel_height:
+            self.grid[px, py] = terrain
+            self._surface_dirty = True
+
+    # ── Cell-level methods (backward compatible) ────────────────────────
 
     def get(self, x: int, y: int, strict: bool = False) -> TerrainType:
         """
-        Get the terrain type at a specific cell.
+        Get the terrain type at a cell via majority vote over 16x16 pixels.
 
         Args:
-            x: Grid x coordinate
-            y: Grid y coordinate
+            x: Grid x coordinate (cell)
+            y: Grid y coordinate (cell)
             strict: If True, raise ValueError for out-of-bounds coordinates.
-                    If False (default), return EMPTY for out-of-bounds.
 
         Returns:
-            TerrainType at the specified cell, or EMPTY if out of bounds (non-strict)
-
-        Raises:
-            ValueError: If strict=True and coordinates are out of bounds
+            Majority TerrainType in the cell, or EMPTY if out of bounds
         """
         if 0 <= x < self.width and 0 <= y < self.height:
-            return TerrainType(self.grid[x, y])
+            return self.get_cell_majority(x, y)
         if strict:
             raise ValueError(
                 f"Coordinates ({x}, {y}) out of bounds for grid size "
@@ -85,20 +124,19 @@ class TerrainGrid:
 
     def set(self, x: int, y: int, terrain: TerrainType, strict: bool = False) -> None:
         """
-        Set the terrain type at a specific cell.
+        Set terrain type for a cell by filling the entire 16x16 pixel block.
 
         Args:
-            x: Grid x coordinate
-            y: Grid y coordinate
+            x: Grid x coordinate (cell)
+            y: Grid y coordinate (cell)
             terrain: TerrainType to set
             strict: If True, raise ValueError for out-of-bounds coordinates.
-                    If False (default), silently ignore out-of-bounds sets.
-
-        Raises:
-            ValueError: If strict=True and coordinates are out of bounds
         """
         if 0 <= x < self.width and 0 <= y < self.height:
-            self.grid[x, y] = terrain
+            cs = self.cell_size
+            px, py = x * cs, y * cs
+            self.grid[px:px + cs, py:py + cs] = terrain
+            self._surface_dirty = True
         elif strict:
             raise ValueError(
                 f"Coordinates ({x}, {y}) out of bounds for grid size "
@@ -114,10 +152,10 @@ class TerrainGrid:
             y: Grid y coordinate
 
         Returns:
-            True if the cell is walkable (not a building or water)
+            True if the cell is walkable (not an obstacle)
         """
         terrain = self.get(x, y)
-        return terrain != TerrainType.BUILDING and terrain != TerrainType.WATER
+        return terrain != TerrainType.OBSTACLE
 
     def blocks_los(self, x: int, y: int) -> bool:
         """
@@ -128,392 +166,279 @@ class TerrainGrid:
             y: Grid y coordinate
 
         Returns:
-            True if the cell blocks visibility (is a building)
+            True if the cell blocks visibility (is an obstacle)
         """
-        return self.get(x, y) == TerrainType.BUILDING
+        return self.get(x, y) == TerrainType.OBSTACLE
+
+    def get_cell_majority(self, cell_x: int, cell_y: int) -> TerrainType:
+        """
+        Get the majority terrain type for a single cell (16x16 pixel block).
+
+        Args:
+            cell_x: Cell x coordinate
+            cell_y: Cell y coordinate
+
+        Returns:
+            Most common TerrainType in the cell
+        """
+        cs = self.cell_size
+        px, py = cell_x * cs, cell_y * cs
+        block = self.grid[px:px + cs, py:py + cs].ravel()
+        counts = np.bincount(block.astype(np.int32), minlength=5)
+        return TerrainType(int(np.argmax(counts)))
+
+    def get_block_majority(self, x: int, y: int) -> TerrainType:
+        """
+        Get the majority terrain type for the terrain block containing (x, y).
+
+        Each terrain block is TACTICAL_CELLS_PER_TERRAIN_BLOCK x
+        TACTICAL_CELLS_PER_TERRAIN_BLOCK tactical cells. This method counts
+        terrain types within that block and returns the most common one.
+
+        Args:
+            x: Tactical grid x coordinate
+            y: Tactical grid y coordinate
+
+        Returns:
+            Most common TerrainType in the block (ties broken by enum order)
+        """
+        from combatenv.config import TACTICAL_CELLS_PER_TERRAIN_BLOCK as BLK
+
+        # Find block origin in cells
+        bx = (x // BLK) * BLK
+        by = (y // BLK) * BLK
+
+        # Convert to pixel coordinates
+        cs = self.cell_size
+        px = bx * cs
+        py = by * cs
+        size = BLK * cs
+
+        # Clamp to grid bounds
+        end_x = min(px + size, self.pixel_width)
+        end_y = min(py + size, self.pixel_height)
+
+        block = self.grid[px:end_x, py:end_y].ravel()
+        if block.size == 0:
+            return TerrainType.EMPTY
+        counts = np.bincount(block.astype(np.int32), minlength=5)
+        return TerrainType(int(np.argmax(counts)))
 
     def clear(self) -> None:
-        """Reset all cells to empty terrain."""
+        """Reset all pixels to empty terrain."""
         self.grid.fill(TerrainType.EMPTY)
+        self._surface_dirty = True
 
-    def _is_valid_placement(self, x: int, y: int, spawn_margin: int) -> bool:
-        """Check if position is valid for terrain placement (not in spawn areas)."""
-        if x < spawn_margin or x >= self.width - spawn_margin:
-            return False
-        if y < spawn_margin or y >= self.height - spawn_margin:
-            return False
-        return True
+    # ── Terrain generation ──────────────────────────────────────────────
 
-    def _generate_puddle(
-        self,
-        center_x: int,
-        center_y: int,
-        target_size: int,
-        terrain_type: TerrainType,
-        spawn_margin: int,
-        rng: random.Random
-    ) -> int:
+    @staticmethod
+    def _enforce_empty_border(
+        grid: np.ndarray,
+        terrain_type: int,
+        allowed: Optional[set] = None
+    ) -> np.ndarray:
         """
-        Generate a puddle-shaped patch using random walk.
+        Remove pixels of terrain_type that touch a different non-empty type.
 
-        Returns number of cells placed.
+        Ensures empty separation between different terrain types.
+        Uses 4-neighbor connectivity (up/down/left/right).
+
+        Args:
+            grid: 2D terrain array to modify in-place
+            terrain_type: The terrain type to erode
+            allowed: Set of terrain types that ARE allowed as neighbors
+                     (e.g. fire is allowed to touch forest)
+
+        Returns:
+            The modified grid
         """
-        placed = 0
-        to_visit = [(center_x, center_y)]
-        visited = set()
+        if allowed is None:
+            allowed = set()
 
-        while to_visit and placed < target_size:
-            x, y = to_visit.pop(rng.randint(0, len(to_visit) - 1))
+        mask = grid == terrain_type
 
-            if (x, y) in visited:
-                continue
-            visited.add((x, y))
+        # Check 4 neighbors via shifts (wrapping is harmless — cleared by margin)
+        bad = np.zeros_like(mask)
+        for shift, axis in [(-1, 0), (1, 0), (-1, 1), (1, 1)]:
+            neighbor = np.roll(grid, shift, axis=axis)
+            is_bad = (neighbor != TerrainType.EMPTY) & (neighbor != terrain_type)
+            for a in allowed:
+                is_bad &= (neighbor != a)
+            bad |= is_bad
 
-            if not self._is_valid_placement(x, y, spawn_margin):
-                continue
-            if self.get(x, y) != TerrainType.EMPTY:
-                continue
+        grid[mask & bad] = TerrainType.EMPTY
+        return grid
 
-            self.set(x, y, terrain_type)
-            placed += 1
-
-            # Add neighbors with random probability for organic shape
-            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1)]:
-                nx, ny = x + dx, y + dy
-                if (nx, ny) not in visited and rng.random() < 0.7:
-                    to_visit.append((nx, ny))
-
-        return placed
-
-    def _generate_fire_line(
-        self,
-        start_x: int,
-        start_y: int,
-        length: int,
-        spawn_margin: int,
-        rng: random.Random
-    ) -> int:
+    @staticmethod
+    def _sample_noise(
+        size: int, seed: int,
+        scale: float = 40.0,
+        octaves: int = 4,
+        persistence: float = 0.5,
+        lacunarity: float = 2.0
+    ) -> np.ndarray:
         """
-        Generate a fire line/arc using random walk with momentum.
+        Sample 2D Perlin noise into a (size, size) float32 array.
 
-        Returns number of cells placed.
+        Args:
+            size: Grid dimension
+            seed: Offset seed for unique maps
+            scale: Noise zoom (lower = larger features)
+            octaves: Number of noise octaves
+            persistence: Amplitude decay per octave
+            lacunarity: Frequency growth per octave
+
+        Returns:
+            (size, size) float32 array of noise values
         """
-        placed = 0
-        x, y = float(start_x), float(start_y)
-        angle = rng.uniform(0, 2 * 3.14159)
+        import noise as _noise
 
-        for _ in range(length):
-            ix, iy = int(x), int(y)
-
-            if self._is_valid_placement(ix, iy, spawn_margin):
-                if self.get(ix, iy) == TerrainType.EMPTY:
-                    self.set(ix, iy, TerrainType.FIRE)
-                    placed += 1
-
-            # Move with slight curve
-            angle += rng.uniform(-0.5, 0.5)
-            x += np.cos(angle)
-            y += np.sin(angle)
-
-            # Bounds check
-            if x < 0 or x >= self.width or y < 0 or y >= self.height:
-                break
-
-        return placed
-
-    def _generate_building_cluster(
-        self,
-        center_x: int,
-        center_y: int,
-        target_size: int,
-        spawn_margin: int,
-        rng: random.Random
-    ) -> int:
-        """
-        Generate a cluster of buildings forming corridor-like structures.
-        Uses L-shaped and rectangular patterns.
-
-        Returns number of cells placed.
-        """
-        placed = 0
-
-        # Generate several connected rectangular/L-shaped segments
-        num_segments = rng.randint(2, 4)
-        x, y = center_x, center_y
-
-        for _ in range(num_segments):
-            if placed >= target_size:
-                break
-
-            # Choose segment type
-            segment_type = rng.choice(['horizontal', 'vertical', 'l_shape'])
-            length = rng.randint(3, 6)
-
-            if segment_type == 'horizontal':
-                for i in range(length):
-                    px = x + i
-                    if self._is_valid_placement(px, y, spawn_margin):
-                        if self.get(px, y) == TerrainType.EMPTY:
-                            self.set(px, y, TerrainType.BUILDING)
-                            placed += 1
-                x += length - 1
-
-            elif segment_type == 'vertical':
-                for i in range(length):
-                    py = y + i
-                    if self._is_valid_placement(x, py, spawn_margin):
-                        if self.get(x, py) == TerrainType.EMPTY:
-                            self.set(x, py, TerrainType.BUILDING)
-                            placed += 1
-                y += length - 1
-
-            else:  # L-shape
-                half = length // 2
-                # Horizontal part
-                for i in range(half):
-                    px = x + i
-                    if self._is_valid_placement(px, y, spawn_margin):
-                        if self.get(px, y) == TerrainType.EMPTY:
-                            self.set(px, y, TerrainType.BUILDING)
-                            placed += 1
-                # Vertical part
-                direction = rng.choice([-1, 1])
-                for i in range(1, half + 1):
-                    py = y + i * direction
-                    if self._is_valid_placement(x + half - 1, py, spawn_margin):
-                        if self.get(x + half - 1, py) == TerrainType.EMPTY:
-                            self.set(x + half - 1, py, TerrainType.BUILDING)
-                            placed += 1
-                x += half - 1
-                y += (half) * direction
-
-            # Small random offset for next segment
-            x += rng.randint(-1, 1)
-            y += rng.randint(-1, 1)
-
-        return placed
+        field = np.empty((size, size), dtype=np.float32)
+        for x in range(size):
+            for y in range(size):
+                field[x, y] = _noise.pnoise2(
+                    (x + seed) / scale, (y + seed) / scale,
+                    octaves=octaves, persistence=persistence,
+                    lacunarity=lacunarity
+                )
+        return field
 
     def generate_random(
         self,
-        building_pct: float = 0.05,
-        fire_pct: float = 0.02,
-        swamp_pct: float = 0.03,
-        water_pct: float = 0.03,
-        spawn_margin: int = 5,
+        obstacle_pct: float = 0.10,
+        spawn_margin: int = 8,
         rng: Optional[random.Random] = None
     ) -> None:
         """
-        Generate random terrain with natural-looking formations.
+        Generate layered terrain with ecological rules.
 
-        - Buildings: Clustered into corridor-like structures
-        - Fire: Lines and arcs
-        - Swamp: Puddle-shaped patches
-        - Water: Puddle-shaped patches
+        Generates at 256x256 resolution and upscales to 1024x1024 for
+        natural pixel-level detail. Four layers placed in order:
+
+        1. Obstacles from high elevation noise
+        2. Water from low elevation + high moisture
+        3. Forest near water (distance transform) and near obstacles
+        4. Fire at forest edges (sparse)
+
+        Empty terrain separates all non-empty types, except fire may
+        touch forest.
 
         Args:
-            building_pct: Percentage of cells to be buildings (0.0-1.0)
-            fire_pct: Percentage of cells to be fire (0.0-1.0)
-            swamp_pct: Percentage of cells to be swamp (0.0-1.0)
-            water_pct: Percentage of cells to be water (0.0-1.0)
+            obstacle_pct: Target fraction of pixels as obstacles (0.0-1.0)
             spawn_margin: Cells from edges to keep clear for spawning
             rng: Random number generator (uses global random if None)
         """
+        from scipy.ndimage import binary_dilation
+
         self.clear()
 
         if rng is None:
             rng = random.Random()
 
-        total_cells = self.width * self.height
-        valid_width = self.width - 2 * spawn_margin
-        valid_height = self.height - 2 * spawn_margin
+        # Work at 256x256 resolution, upscale 4x to 1024x1024
+        gen_size = self.pixel_width // 4  # 256
+        upscale = 4
 
-        # Calculate target counts
-        building_target = int(total_cells * building_pct)
-        fire_target = int(total_cells * fire_pct)
-        swamp_target = int(total_cells * swamp_pct)
-        water_target = int(total_cells * water_pct)
+        # Spawn margin in gen_size pixels: cells * cell_size / upscale
+        margin_px = max(1, spawn_margin * self.cell_size // upscale)
 
-        # Generate building clusters (corridors)
-        building_placed = 0
-        num_clusters = max(1, building_target // 15)
-        for _ in range(num_clusters):
-            if building_placed >= building_target:
-                break
-            cx = rng.randint(spawn_margin, self.width - spawn_margin - 1)
-            cy = rng.randint(spawn_margin, self.height - spawn_margin - 1)
-            cluster_size = rng.randint(10, 20)
-            building_placed += self._generate_building_cluster(
-                cx, cy, min(cluster_size, building_target - building_placed),
-                spawn_margin, rng
-            )
+        # Noise seeds
+        seed_e = rng.randint(0, 65535)
+        seed_m = rng.randint(0, 65535)
+        seed_f = rng.randint(0, 65535)
 
-        # Generate fire lines/arcs
-        fire_placed = 0
-        num_fires = max(1, fire_target // 8)
-        for _ in range(num_fires):
-            if fire_placed >= fire_target:
-                break
-            fx = rng.randint(spawn_margin, self.width - spawn_margin - 1)
-            fy = rng.randint(spawn_margin, self.height - spawn_margin - 1)
-            line_length = rng.randint(5, 15)
-            fire_placed += self._generate_fire_line(
-                fx, fy, min(line_length, fire_target - fire_placed),
-                spawn_margin, rng
-            )
+        # Generate noise fields at 256x256
+        elev = self._sample_noise(gen_size, seed_e, scale=40.0)
+        moist = self._sample_noise(gen_size, seed_m, scale=40.0)
 
-        # Generate swamp puddles
-        swamp_placed = 0
-        num_swamps = max(1, swamp_target // 12)
-        for _ in range(num_swamps):
-            if swamp_placed >= swamp_target:
-                break
-            sx = rng.randint(spawn_margin, self.width - spawn_margin - 1)
-            sy = rng.randint(spawn_margin, self.height - spawn_margin - 1)
-            puddle_size = rng.randint(8, 20)
-            swamp_placed += self._generate_puddle(
-                sx, sy, min(puddle_size, swamp_target - swamp_placed),
-                TerrainType.SWAMP, spawn_margin, rng
-            )
+        grid_256 = np.zeros((gen_size, gen_size), dtype=np.int8)
 
-        # Generate water puddles
-        water_placed = 0
-        num_waters = max(1, water_target // 12)
-        for _ in range(num_waters):
-            if water_placed >= water_target:
-                break
-            wx = rng.randint(spawn_margin, self.width - spawn_margin - 1)
-            wy = rng.randint(spawn_margin, self.height - spawn_margin - 1)
-            puddle_size = rng.randint(8, 20)
-            water_placed += self._generate_puddle(
-                wx, wy, min(puddle_size, water_target - water_placed),
-                TerrainType.WATER, spawn_margin, rng
-            )
+        # ── Layer 1: Obstacles from high elevation ───────────────────
+        obstacle_threshold = np.percentile(elev, 100 - obstacle_pct * 100)
+        grid_256[elev > obstacle_threshold] = TerrainType.OBSTACLE
 
-
-if __name__ == "__main__":
-    """Basic self-tests for terrain module."""
-    import sys
-
-    def test_terrain_type_enum():
-        """Test TerrainType enum values."""
-        assert TerrainType.EMPTY == 0
-        assert TerrainType.BUILDING == 1
-        assert TerrainType.FIRE == 2
-        assert TerrainType.SWAMP == 3
-        assert TerrainType.WATER == 4
-        print("  TerrainType enum: OK")
-
-    def test_terrain_grid_creation():
-        """Test TerrainGrid creation."""
-        grid = TerrainGrid(64, 64)
-        assert grid.width == 64
-        assert grid.height == 64
-        assert grid.grid.shape == (64, 64)
-        print("  TerrainGrid creation: OK")
-
-    def test_terrain_grid_get_set():
-        """Test get and set operations."""
-        grid = TerrainGrid(10, 10)
-
-        # Default is EMPTY
-        assert grid.get(5, 5) == TerrainType.EMPTY
-
-        # Set and get
-        grid.set(5, 5, TerrainType.BUILDING)
-        assert grid.get(5, 5) == TerrainType.BUILDING
-
-        # Out of bounds returns EMPTY
-        assert grid.get(-1, 5) == TerrainType.EMPTY
-        assert grid.get(100, 5) == TerrainType.EMPTY
-        print("  get/set: OK")
-
-    def test_is_walkable():
-        """Test walkability checks."""
-        grid = TerrainGrid(10, 10)
-
-        # EMPTY is walkable
-        assert grid.is_walkable(5, 5) == True
-
-        # BUILDING is not walkable
-        grid.set(5, 5, TerrainType.BUILDING)
-        assert grid.is_walkable(5, 5) == False
-
-        # WATER is not walkable
-        grid.set(6, 6, TerrainType.WATER)
-        assert grid.is_walkable(6, 6) == False
-
-        # FIRE is walkable
-        grid.set(7, 7, TerrainType.FIRE)
-        assert grid.is_walkable(7, 7) == True
-
-        # SWAMP is walkable
-        grid.set(8, 8, TerrainType.SWAMP)
-        assert grid.is_walkable(8, 8) == True
-        print("  is_walkable: OK")
-
-    def test_blocks_los():
-        """Test line of sight blocking."""
-        grid = TerrainGrid(10, 10)
-
-        # EMPTY doesn't block
-        assert grid.blocks_los(5, 5) == False
-
-        # BUILDING blocks
-        grid.set(5, 5, TerrainType.BUILDING)
-        assert grid.blocks_los(5, 5) == True
-
-        # WATER doesn't block
-        grid.set(6, 6, TerrainType.WATER)
-        assert grid.blocks_los(6, 6) == False
-        print("  blocks_los: OK")
-
-    def test_generate_random():
-        """Test random terrain generation."""
-        grid = TerrainGrid(64, 64)
-        rng = random.Random(42)  # Fixed seed for reproducibility
-
-        grid.generate_random(
-            building_pct=0.05,
-            fire_pct=0.02,
-            swamp_pct=0.03,
-            water_pct=0.03,
-            spawn_margin=5,
-            rng=rng
+        # ── Layer 2: Water from low elevation + high moisture ────────
+        water_elev_pct = np.percentile(elev, 15)
+        water_mask = (
+            (elev < water_elev_pct) &
+            (moist > -0.05) &
+            (grid_256 == TerrainType.EMPTY)
         )
+        grid_256[water_mask] = TerrainType.WATER
 
-        # Count terrain types
-        counts = {t: 0 for t in TerrainType}
-        for x in range(64):
-            for y in range(64):
-                counts[grid.get(x, y)] += 1
+        # ── Layer 3: Forest from independent noise field ───────────
+        forest_noise = self._sample_noise(gen_size, seed_f, scale=35.0)
+        empty_mask = grid_256 == TerrainType.EMPTY
+        empty_count = empty_mask.sum()
+        if empty_count > 0:
+            # Target ~10% of total grid as forest
+            target_forest = int(gen_size * gen_size * 0.10)
+            forest_vals = forest_noise[empty_mask]
+            threshold = np.percentile(forest_vals, max(0, 100 - target_forest / empty_count * 100))
+            forest_mask = empty_mask & (forest_noise > threshold)
+            grid_256[forest_mask] = TerrainType.FOREST
 
-        # Should have some of each type
-        assert counts[TerrainType.BUILDING] > 0, "Should have buildings"
-        assert counts[TerrainType.FIRE] > 0, "Should have fire"
-        assert counts[TerrainType.SWAMP] > 0, "Should have swamp"
-        assert counts[TerrainType.WATER] > 0, "Should have water"
-        print(f"  generate_random: OK (B:{counts[TerrainType.BUILDING]}, F:{counts[TerrainType.FIRE]}, S:{counts[TerrainType.SWAMP]}, W:{counts[TerrainType.WATER]})")
+        # ── Layer 4: Fire at forest edges (sparse) ───────────────────
+        forest_binary = (grid_256 == TerrainType.FOREST).astype(np.int8)
+        forest_dilated = binary_dilation(forest_binary, iterations=1)
+        fire_candidates = forest_dilated & (grid_256 == TerrainType.EMPTY)
 
-    def test_clear():
-        """Test clearing the grid."""
-        grid = TerrainGrid(10, 10)
-        grid.set(5, 5, TerrainType.BUILDING)
-        grid.clear()
-        assert grid.get(5, 5) == TerrainType.EMPTY
-        print("  clear: OK")
+        fire_noise = self._sample_noise(gen_size, seed_f, scale=20.0, octaves=2)
+        grid_256[fire_candidates & (fire_noise > 0.2)] = TerrainType.FIRE
 
-    # Run all tests
-    print("Running terrain.py self-tests...")
-    try:
-        test_terrain_type_enum()
-        test_terrain_grid_creation()
-        test_terrain_grid_get_set()
-        test_is_walkable()
-        test_blocks_los()
-        test_generate_random()
-        test_clear()
-        print("All terrain.py self-tests passed!")
-        sys.exit(0)
-    except AssertionError as e:
-        print(f"FAILED: {e}")
-        sys.exit(1)
+        # ── Spawn margin: clear spawn corners only ─────────────────────
+        # Blue spawns top-left, Red spawns bottom-right
+        grid_256[:margin_px, :margin_px] = TerrainType.EMPTY
+        grid_256[-margin_px:, -margin_px:] = TerrainType.EMPTY
+
+        # ── Upscale 256x256 → 1024x1024 ─────────────────────────────
+        self.grid = np.kron(
+            grid_256, np.ones((upscale, upscale), dtype=np.int8)
+        )
+        self._surface_dirty = True
+
+    def generate_corridors(
+        self,
+        spawn_margin: int = 5,
+        rng: Optional[random.Random] = None
+    ) -> None:
+        """
+        Generate a corridor map for movement training.
+
+        Creates a grid pattern of corridors (EMPTY cells) through a field of
+        OBSTACLE terrain.
+
+        Args:
+            spawn_margin: Cells from edges to keep clear for spawning
+            rng: Random number generator (unused, kept for API consistency)
+        """
+        from combatenv.config import CORRIDOR_WIDTH, CORRIDOR_SPACING, OPERATIONAL_GRID_SIZE
+
+        self.clear()
+
+        # Step 1: Fill entire map with obstacles (except spawn areas)
+        for x in range(self.width):
+            for y in range(self.height):
+                in_blue_spawn = x < spawn_margin and y < spawn_margin
+                in_red_spawn = x >= self.width - spawn_margin and y >= self.height - spawn_margin
+                if not in_blue_spawn and not in_red_spawn:
+                    self.set(x, y, TerrainType.OBSTACLE)
+
+        # Step 2: Carve corridors aligned with operational grid
+        for cy in range(OPERATIONAL_GRID_SIZE + 1):
+            base_y = cy * CORRIDOR_SPACING
+            for w in range(CORRIDOR_WIDTH):
+                y = base_y + w
+                if 0 <= y < self.height:
+                    for x in range(self.width):
+                        self.set(x, y, TerrainType.EMPTY)
+
+        for cx in range(OPERATIONAL_GRID_SIZE + 1):
+            base_x = cx * CORRIDOR_SPACING
+            for w in range(CORRIDOR_WIDTH):
+                x = base_x + w
+                if 0 <= x < self.width:
+                    for y in range(self.height):
+                        self.set(x, y, TerrainType.EMPTY)
+
+        self._surface_dirty = True

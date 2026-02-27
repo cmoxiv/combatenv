@@ -154,7 +154,7 @@ The main game loop follows a Gymnasium pattern with internal phases:
 |   |  For each projectile:                                        |      |
 |   |  ├── Update position (projectile.update(dt, terrain_grid))   |      |
 |   |  ├── Check expiration (lifetime, out of bounds)              |      |
-|   |  ├── Check collision with buildings (destroyed on hit)       |      |
+|   |  ├── Check collision with obstacles (destroyed on hit)       |      |
 |   |  ├── Check collision with all agents                         |      |
 |   |  └── Apply damage on hit (agent.take_damage())               |      |
 |   +-------------------------------------------------------------+      |
@@ -173,7 +173,7 @@ The main game loop follows a Gymnasium pattern with internal phases:
 |   |  For each living agent:                                      |      |
 |   |  ├── Check terrain at position                               |      |
 |   |  ├── Apply fire damage (bypasses armor)                      |      |
-|   |  └── Update swamp stuck state                                |      |
+|   |  └── Update forest stuck state                                |      |
 |   +-------------------------------------------------------------+      |
 |                              |                                          |
 |                              v                                          |
@@ -190,7 +190,7 @@ The main game loop follows a Gymnasium pattern with internal phases:
 |   |  render_all() draws in order:                                |      |
 |   |  ├── 1. Background (white)                                   |      |
 |   |  ├── 2. Grid lines (faint gray)                              |      |
-|   |  ├── 3. Terrain (buildings, fire, swamp, water)              |      |
+|   |  ├── 3. Terrain (obstacles, fire, forest, water)             |      |
 |   |  ├── 4. FOV highlights (layered transparency)                |      |
 |   |  ├── 5. Agents (circles with orientation)                    |      |
 |   |  ├── 6. Projectiles                                          |      |
@@ -246,9 +246,9 @@ The main game loop follows a Gymnasium pattern with internal phases:
 |                                                                     |
 |   TerrainType (IntEnum):                                            |
 |   ├── EMPTY (0)    - Passable, no effect                            |
-|   ├── BUILDING (1) - Blocks movement AND line of sight              |
+|   ├── OBSTACLE (1) - Blocks movement AND line of sight              |
 |   ├── FIRE (2)     - Passable, damages agents (bypasses armor)      |
-|   ├── SWAMP (3)    - Passable, temporarily immobilizes agents       |
+|   ├── FOREST (3)   - Passable, temporarily immobilizes agents       |
 |   └── WATER (4)    - Blocks movement, allows line of sight          |
 |                                                                     |
 |   TerrainGrid:                                                      |
@@ -380,9 +380,9 @@ The main game loop follows a Gymnasium pattern with internal phases:
 |   +-----------------------------------------------------+          |
 |   |  Terrain type for each visible cell (normalized):    |          |
 |   |    - EMPTY = 0.0                                     |          |
-|   |    - BUILDING = 0.25                                 |          |
+|   |    - OBSTACLE = 0.25                                 |          |
 |   |    - FIRE = 0.5                                      |          |
-|   |    - SWAMP = 0.75                                    |          |
+|   |    - FOREST = 0.75                                   |          |
 |   |    - WATER = 1.0                                     |          |
 |   |  Cells sorted by distance from agent                 |          |
 |   +-----------------------------------------------------+          |
@@ -548,7 +548,7 @@ All modules are organized in the `combatenv` package with clear public API expor
 | Spatial grid build | O(n) | Runs once per frame |
 | Neighbor query | O(1) | Constant time hash lookup |
 | FOV calculation | O(agents * rays) | Cached; only recalculates on significant movement |
-| Projectile collision | O(projectiles * agents) | Also checks building collision |
+| Projectile collision | O(projectiles * agents) | Also checks obstacle collision |
 | Rendering | O(cells + agents) | Linear in visible elements |
 
 ### Memory Usage

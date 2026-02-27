@@ -85,7 +85,7 @@ class EnvConfig:
   - Indices 10-29: 5 nearest enemies (4 floats each: rel_x, rel_y, health, distance)
   - Indices 30-49: 5 nearest allies (4 floats each: rel_x, rel_y, health, distance)
   - Indices 50-87: Terrain types for up to 38 FOV cells (normalized 0-1)
-    - EMPTY=0.0, BUILDING=0.25, FIRE=0.5, SWAMP=0.75, WATER=1.0
+    - EMPTY=0.0, OBSTACLE=0.25, FIRE=0.5, FOREST=0.75, WATER=1.0
 
 **Action Space:** `Box(low=[-1, -1, 0], high=[1, 1, 1], shape=(3,), dtype=float32)`
 - `action[0]`: Forward/backward movement (-1 to 1)
@@ -211,8 +211,8 @@ damage = config.PROJECTILE_DAMAGE
 | Constant                 | Default | Type  | Description                        |
 |--------------------------|---------|-------|------------------------------------|
 | `FIRE_DAMAGE_PER_STEP`   | 5       | int   | Damage per step on fire terrain    |
-| `SWAMP_STUCK_MIN_STEPS`  | 3       | int   | Minimum steps stuck in swamp       |
-| `SWAMP_STUCK_MAX_STEPS`  | 6       | int   | Maximum steps stuck in swamp       |
+| `FOREST_STUCK_MIN_STEPS` | 3       | int   | Minimum steps stuck in forest      |
+| `FOREST_STUCK_MAX_STEPS` | 6       | int   | Maximum steps stuck in forest      |
 
 ### Resource Management - Stamina
 
@@ -244,9 +244,9 @@ damage = config.PROJECTILE_DAMAGE
 | `COLOR_BLUE_TEAM`       | (0, 0, 255)     | Blue team agents        |
 | `COLOR_RED_TEAM`        | (255, 0, 0)     | Red team agents         |
 | `COLOR_DEAD_AGENT`      | (128, 128, 128) | Dead agent color (gray) |
-| `COLOR_BUILDING`        | (64, 64, 64)    | Building terrain        |
+| `COLOR_OBSTACLE`        | (64, 64, 64)    | Obstacle terrain        |
 | `COLOR_FIRE`            | (255, 100, 0)   | Fire terrain            |
-| `COLOR_SWAMP`           | (100, 150, 100) | Swamp terrain           |
+| `COLOR_FOREST`          | (100, 150, 100) | Forest terrain          |
 | `COLOR_WATER`           | (100, 150, 255) | Water terrain           |
 
 ---
@@ -350,9 +350,9 @@ from combatenv import TerrainType, TerrainGrid
 ```python
 class TerrainType(IntEnum):
     EMPTY = 0     # Passable, no effect
-    BUILDING = 1  # Blocks movement and LOS
+    OBSTACLE = 1  # Blocks movement and LOS
     FIRE = 2      # Damages agents (bypasses armor)
-    SWAMP = 3     # Temporarily immobilizes agents
+    FOREST = 3    # Temporarily immobilizes agents
     WATER = 4     # Blocks movement, allows LOS
 ```
 
@@ -371,7 +371,7 @@ class TerrainGrid:
 ### Factory Function
 
 ##### `generate_random_terrain(grid_size, seed) -> TerrainGrid`
-Generate a random terrain grid with buildings, fire, swamp, and water.
+Generate a random terrain grid with obstacles, fire, forest, and water.
 
 ---
 
@@ -475,9 +475,9 @@ Update position and lifetime.
 
 **Parameters:**
 - `dt`: Delta time in seconds
-- `terrain_grid`: Optional TerrainGrid for building collision detection
+- `terrain_grid`: Optional TerrainGrid for obstacle collision detection
 
-**Returns:** True if projectile should be removed (expired, out of bounds, or hit building)
+**Returns:** True if projectile should be removed (expired, out of bounds, or hit obstacle)
 
 ##### `check_collision(agent) -> bool`
 Check collision with an agent.

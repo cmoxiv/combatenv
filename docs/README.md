@@ -26,7 +26,7 @@ This simulation creates a tactical environment where two teams (blue and red, 10
 - **Autonomous AI**: Agents wander, avoid boundaries, and engage enemies
 - **Two-Layer FOV System**: Near and far vision cones with different accuracy modifiers
 - **Resource Management**: Stamina, armor, and ammunition systems
-- **Terrain System**: Buildings, fire, swamp, and water with unique effects
+- **Terrain System**: Obstacles, fire, forest, and water with unique effects
 - **Spatial Optimization**: Efficient collision detection using spatial hashing
 
 ```
@@ -79,16 +79,16 @@ for _ in range(1000):
 - Accuracy affected by FOV layer and movement
 - 0.5 second cooldown between shots
 - 25 damage per hit
-- Projectiles are destroyed when colliding with buildings
+- Projectiles are destroyed when colliding with obstacles
 
 ### Terrain System
 
 | Terrain | Effect | Blocks Movement | Blocks LOS |
 |---------|--------|-----------------|------------|
 | Empty | None | No | No |
-| Building | Impassable | Yes | Yes |
+| Obstacle | Impassable | Yes | Yes |
 | Fire | 5 damage/step (bypasses armor) | No | No |
-| Swamp | Stuck for 3-6 steps | No | No |
+| Forest | Stuck for 3-6 steps | No | No |
 | Water | Impassable | Yes | No |
 
 ### Resource Management
@@ -371,11 +371,9 @@ All game parameters are centralized in `combatenv/config.py`. This module allows
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `FIRE_DAMAGE_PER_STEP` | 2 | HP per step in fire (bypasses armor) |
-| `SWAMP_STUCK_MIN_STEPS` | 30 | Min steps stuck (~0.5 sec) |
-| `SWAMP_STUCK_MAX_STEPS` | 90 | Max steps stuck (~1.5 sec) |
-| `TERRAIN_BUILDING_PCT` | 0.05 | 5% of grid |
+| `TERRAIN_OBSTACLE_PCT` | 0.05 | 5% of grid |
 | `TERRAIN_FIRE_PCT` | 0.02 | 2% of grid |
-| `TERRAIN_SWAMP_PCT` | 0.03 | 3% of grid |
+| `TERRAIN_FOREST_PCT` | 0.03 | 3% of grid |
 | `TERRAIN_WATER_PCT` | 0.03 | 3% of grid |
 
 ### Colors
@@ -388,9 +386,9 @@ Colors are defined as RGB tuples. Key color constants:
 | `COLOR_BLUE_TEAM` | (0, 0, 255) | Blue team agents |
 | `COLOR_RED_TEAM` | (255, 0, 0) | Red team agents |
 | `COLOR_DEAD_AGENT` | (128, 128, 128) | Gray for dead agents |
-| `COLOR_BUILDING` | (64, 64, 64) | Dark gray buildings |
+| `COLOR_OBSTACLE` | (64, 64, 64) | Dark gray obstacles |
 | `COLOR_FIRE` | (255, 100, 0) | Orange fire |
-| `COLOR_SWAMP` | (0, 100, 50) | Dark green swamp |
+| `COLOR_FOREST` | (0, 100, 50) | Dark green forest |
 | `COLOR_WATER` | (0, 100, 200) | Blue water |
 
 See `docs/API.md` for complete configuration reference.
@@ -460,8 +458,8 @@ Press **F** to toggle the FOV visualization (on by default). Disabling FOV overl
 - Implemented reward function and termination conditions
 
 **Phase 6: Terrain System**
-- Added TerrainType enum (EMPTY, BUILDING, FIRE, SWAMP, WATER)
-- Implemented terrain effects (fire damage, swamp stuck)
+- Added TerrainType enum (EMPTY, OBSTACLE, FIRE, FOREST, WATER)
+- Implemented terrain effects (fire damage, forest stuck)
 - Integrated terrain with line-of-sight blocking
 
 **Phase 5: Combat System**

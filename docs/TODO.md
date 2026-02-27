@@ -21,9 +21,9 @@
 - [x] **Armor System**: Depleting damage absorption
 
 ### Terrain System
-- [x] **Terrain Types**: EMPTY, BUILDING, FIRE, SWAMP, WATER
-- [x] **Terrain Effects**: Fire damage, swamp stuck, building blocking
-- [x] **LOS Integration**: Buildings block line of sight
+- [x] **Terrain Types**: EMPTY, OBSTACLE, FIRE, FOREST, WATER
+- [x] **Terrain Effects**: Fire damage, forest stuck, obstacle blocking
+- [x] **LOS Integration**: Obstacles block line of sight
 - [x] **Procedural Generation**: Random terrain placement
 
 ### Infrastructure
@@ -60,7 +60,7 @@
 
 - [ ] **Advanced AI Behaviors**:
   - Target prioritization by health
-  - Cover-seeking behavior near buildings
+  - Cover-seeking behavior near obstacles
   - Team coordination (flanking, focus fire)
 
 - [ ] **Environment Variants**:

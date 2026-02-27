@@ -113,7 +113,7 @@ class Projectile:
         if terrain_grid is not None:
             cell_x = int(new_x)
             cell_y = int(new_y)
-            if terrain_grid.get(cell_x, cell_y) == TerrainType.BUILDING:
+            if terrain_grid.get(cell_x, cell_y) == TerrainType.OBSTACLE:
                 return True
 
         return False

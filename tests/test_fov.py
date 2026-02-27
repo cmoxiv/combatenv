@@ -180,7 +180,7 @@ class TestGetFovCells:
     def test_with_terrain_blocking(self):
         """Test buildings block FOV."""
         terrain = TerrainGrid(20, 20)
-        terrain.set(11, 10, TerrainType.BUILDING)  # Building in front
+        terrain.set(11, 10, TerrainType.OBSTACLE)  # Building in front
 
         cells = get_fov_cells((10.0, 10.0), 0.0, 90, 5, terrain_grid=terrain)
 
@@ -275,7 +275,7 @@ class TestAgentVisibility:
     def test_blocked_by_building(self):
         """Test building blocks visibility."""
         terrain = TerrainGrid(20, 20)
-        terrain.set(11, 10, TerrainType.BUILDING)
+        terrain.set(11, 10, TerrainType.OBSTACLE)
 
         observer = Agent(position=(10.0, 10.0), orientation=0.0, team="blue")
         target = Agent(position=(13.0, 10.0), orientation=0.0, team="red")

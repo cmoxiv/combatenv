@@ -34,7 +34,7 @@ Layer 5: Agents (circles with orientation)
    ^
 Layer 4: FOV Highlights (semi-transparent)
    ^
-Layer 3: Terrain (buildings, fire, swamp, water)
+Layer 3: Terrain (obstacles, fire, forest, water)
    ^
 Layer 2: Grid Lines (faint gray)
    ^
@@ -150,7 +150,7 @@ All visual parameters in `combatenv/config.py`:
 
 - Grid: `CELL_SIZE=16`, `GRID_SIZE=64`, `GRID_LINE_WIDTH=1`
 - Agents: `AGENT_SIZE_RATIO=0.7`, `AGENT_NOSE_RATIO=0.4`
-- Colors: `COLOR_BLUE_TEAM`, `COLOR_RED_TEAM`, `COLOR_BUILDING`, etc.
+- Colors: `COLOR_BLUE_TEAM`, `COLOR_RED_TEAM`, `COLOR_OBSTACLE`, etc.
 - Transparency: `FOV_NEAR_ALPHA`, `FOV_FAR_ALPHA`, `OVERLAP_*_ALPHA`
 
 ## Visual Specifications
@@ -163,9 +163,9 @@ All visual parameters in `combatenv/config.py`:
 - 1px line width
 
 ### Terrain
-- Building: Dark gray (64, 64, 64)
+- Obstacle: Dark gray (64, 64, 64)
 - Fire: Orange (255, 100, 0)
-- Swamp: Muted green (100, 150, 100)
+- Forest: Muted green (100, 150, 100)
 - Water: Light blue (100, 150, 255)
 
 ### FOV Highlights

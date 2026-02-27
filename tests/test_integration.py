@@ -4,7 +4,7 @@ Integration tests for the Grid-World Multi-Agent Tactical Simulation.
 Tests cover end-to-end scenarios:
 - Full episode execution
 - Combat flow (shoot -> hit -> damage -> death)
-- Terrain interaction (fire damage, swamp stuck, building blocking)
+- Terrain interaction (fire damage, forest slowing, building blocking)
 - FOV with terrain LOS blocking
 - Respawn cycle
 - Gymnasium compliance
@@ -26,7 +26,8 @@ PROJECTILE_DAMAGE = config.PROJECTILE_DAMAGE
 AGENT_MAX_HEALTH = config.AGENT_MAX_HEALTH
 GRID_SIZE = config.GRID_SIZE
 FIRE_DAMAGE_PER_STEP = config.FIRE_DAMAGE_PER_STEP
-SWAMP_STUCK_MIN_STEPS = config.SWAMP_STUCK_MIN_STEPS
+FOREST_SPEED_MULTIPLIER = config.FOREST_SPEED_MULTIPLIER
+WATER_SPEED_MULTIPLIER = config.WATER_SPEED_MULTIPLIER
 
 
 class TestFullEpisode:
@@ -132,6 +133,16 @@ class TestCombatFlow:
 class TestTerrainInteraction:
     """Test terrain effects on agents."""
 
+    @staticmethod
+    def _fill_block(terrain_grid, x, y, terrain_type):
+        """Fill the entire terrain block containing (x, y) with terrain_type."""
+        from combatenv.config import TACTICAL_CELLS_PER_TERRAIN_BLOCK as BLK
+        bx = (x // BLK) * BLK
+        by = (y // BLK) * BLK
+        for dx in range(BLK):
+            for dy in range(BLK):
+                terrain_grid.set(bx + dx, by + dy, terrain_type)
+
     def test_fire_damages_over_time(self):
         """Test standing in fire causes damage."""
         env = TacticalCombatEnv(render_mode=None)
@@ -140,9 +151,9 @@ class TestTerrainInteraction:
         agent = env.controlled_agent
         initial_health = agent.health
 
-        # Place agent on fire
+        # Fill agent's block with fire so block majority is FIRE
         cell = agent.get_grid_position()
-        env.terrain_grid.set(cell[0], cell[1], TerrainType.FIRE)
+        self._fill_block(env.terrain_grid, cell[0], cell[1], TerrainType.FIRE)
 
         # Step multiple times
         for _ in range(5):
@@ -162,26 +173,32 @@ class TestTerrainInteraction:
         assert agent.armor == initial_armor, "Armor should be unchanged"
         assert agent.health < initial_health, "Health should take damage"
 
-    def test_swamp_prevents_movement(self):
-        """Test stuck agents cannot move."""
-        env = TacticalCombatEnv(render_mode=None)
-        env.reset(seed=42)
+    def test_forest_slows_movement(self):
+        """Test agents in forest terrain move at reduced speed."""
+        # Create a terrain grid with forest at agent position
+        terrain = TerrainGrid(64, 64)
+        terrain.set(10, 10, TerrainType.FOREST)
 
-        agent = env.controlled_agent
-        agent.stuck_steps = SWAMP_STUCK_MIN_STEPS
+        # Create agent in forest
+        agent = Agent(position=(10.5, 10.5), orientation=0.0, team="blue")
+        agent.in_forest = True
 
-        initial_pos = agent.position
+        # Move with forest speed reduction
+        initial_x = agent.position[0]
+        agent.move_forward(speed=1.0, dt=1.0, terrain_grid=terrain)
 
-        # Try to move
-        env.step(np.array([1.0, 0.0, 0.0]))
+        # Calculate expected movement
+        expected_distance = 1.0 * FOREST_SPEED_MULTIPLIER  # 50% of normal speed
 
-        # Position should not change significantly (agent is stuck)
-        # Note: Orientation may change but position should stay same
+        # Agent should move at reduced speed
+        actual_distance = agent.position[0] - initial_x
+        assert abs(actual_distance - expected_distance) < 0.1, \
+            f"Forest should reduce speed to {FOREST_SPEED_MULTIPLIER}x, got {actual_distance} vs {expected_distance}"
 
     def test_building_blocks_movement(self):
         """Test building blocks agent movement."""
         terrain = TerrainGrid(64, 64)
-        terrain.set(11, 10, TerrainType.BUILDING)
+        terrain.set(11, 10, TerrainType.OBSTACLE)
 
         # Start agent just before building
         agent = Agent(position=(10.5, 10.0), orientation=0.0, team="blue")
@@ -193,6 +210,57 @@ class TestTerrainInteraction:
         assert result == False, "Movement into building should be blocked"
         assert agent.position[0] < 11.0, "Agent should not enter building cell"
 
+    def test_water_slows_movement(self):
+        """Test water terrain slows agent movement by 50%."""
+        terrain = TerrainGrid(64, 64)
+        terrain.set(10, 10, TerrainType.WATER)
+
+        # Create agent in water
+        agent = Agent(position=(10.5, 10.5), orientation=0.0, team="blue")
+        agent.in_water = True
+
+        # Move with water speed reduction
+        initial_x = agent.position[0]
+        agent.move_forward(speed=1.0, dt=1.0, terrain_grid=terrain)
+
+        # Calculate expected movement
+        expected_distance = 1.0 * WATER_SPEED_MULTIPLIER  # 50% of normal speed
+
+        # Agent should move at reduced speed
+        actual_distance = agent.position[0] - initial_x
+        assert abs(actual_distance - expected_distance) < 0.1, \
+            f"Water should reduce speed to {WATER_SPEED_MULTIPLIER}x, got {actual_distance} vs {expected_distance}"
+
+    def test_water_prevents_shooting(self):
+        """Test agent in water cannot shoot."""
+        agent = Agent(position=(10.0, 10.0), orientation=0.0, team="blue")
+
+        # Verify agent can shoot normally
+        assert agent.can_shoot() == True
+
+        # Set agent in water
+        agent.in_water = True
+
+        # Agent should not be able to shoot in water
+        assert agent.can_shoot() == False
+
+    def test_water_grants_invisibility(self):
+        """Test agent in water is invisible to enemies."""
+        terrain = TerrainGrid(20, 20)
+        terrain.set(13, 10, TerrainType.WATER)  # Target is in water
+
+        observer = Agent(position=(10.0, 10.0), orientation=0.0, team="blue")
+        target = Agent(position=(13.0, 10.0), orientation=180.0, team="red")
+
+        # Target is in water and should be invisible (detection multiplier = 0)
+        visible = is_agent_visible_to_agent(
+            observer, target,
+            fov_angle=90, max_range=5,
+            terrain_grid=terrain
+        )
+
+        assert visible == False, "Agent in water should be invisible"
+
 
 class TestFOVWithTerrain:
     """Test FOV interaction with terrain."""
@@ -200,7 +268,7 @@ class TestFOVWithTerrain:
     def test_building_blocks_los(self):
         """Test building blocks line of sight."""
         terrain = TerrainGrid(20, 20)
-        terrain.set(11, 10, TerrainType.BUILDING)
+        terrain.set(11, 10, TerrainType.OBSTACLE)
 
         observer = Agent(position=(10.0, 10.0), orientation=0.0, team="blue")
         target = Agent(position=(13.0, 10.0), orientation=180.0, team="red")
@@ -216,7 +284,7 @@ class TestFOVWithTerrain:
     def test_building_blocks_shooting(self):
         """Test cannot shoot through building."""
         terrain = TerrainGrid(20, 20)
-        terrain.set(11, 10, TerrainType.BUILDING)
+        terrain.set(11, 10, TerrainType.OBSTACLE)
 
         shooter = Agent(position=(10.0, 10.0), orientation=0.0, team="blue")
         target = Agent(position=(13.0, 10.0), orientation=180.0, team="red")
@@ -259,14 +327,23 @@ class TestRespawnCycle:
         assert agent.health == AGENT_MAX_HEALTH
         assert agent.is_alive == True
 
-    def test_respawn_clears_stuck(self):
-        """Test respawn clears stuck state."""
+    def test_respawn_clears_forest_state(self):
+        """Test respawn clears in_forest state."""
         agent = Agent(position=(10.0, 10.0), orientation=0.0, team="blue")
-        agent.stuck_steps = 100
+        agent.in_forest = True
 
         agent.respawn()
 
-        assert agent.stuck_steps == 0
+        assert agent.in_forest == False
+
+    def test_respawn_clears_water_state(self):
+        """Test respawn clears in_water state."""
+        agent = Agent(position=(10.0, 10.0), orientation=0.0, team="blue")
+        agent.in_water = True
+
+        agent.respawn()
+
+        assert agent.in_water == False
 
     def test_respawn_moves_to_spawn_area(self):
         """Test respawn moves agent to spawn quadrant."""
@@ -340,7 +417,7 @@ class TestSpawnWithTerrain:
         # Fill most of a quadrant with terrain
         for x in range(5, 20):
             for y in range(5, 20):
-                terrain.set(x, y, TerrainType.BUILDING)
+                terrain.set(x, y, TerrainType.OBSTACLE)
 
         # Spawn should still work (finds empty cells)
         agents = spawn_team("blue", num_agents=10, terrain_grid=terrain)

@@ -28,7 +28,7 @@ Classes:
     EnvConfig: Environment configuration dataclass
     Agent: Agent entity with movement, combat, resources
     TerrainGrid: Grid-based terrain storage
-    TerrainType: Enum of terrain types (EMPTY, BUILDING, FIRE, SWAMP, WATER)
+    TerrainType: Enum of terrain types (EMPTY, OBSTACLE, FIRE, FOREST, WATER)
     Projectile: Projectile entity
     SpatialGrid: Spatial partitioning for collision detection
 
@@ -46,8 +46,46 @@ __version__ = "0.1.1"
 # Core environment
 from .environment import TacticalCombatEnv, EnvConfig, OBS_SIZE
 
+# Base environment (for wrapper architecture)
+from .gridworld import GridWorld
+
+# Factory functions for wrapper-based environments
+from .wrapper_factory import (
+    create_minimal_env,
+    create_terrain_env,
+    create_combat_env,
+    create_full_env,
+    create_tactical_env,
+)
+
+# Strategic environment
+from .strategic_env import StrategicCombatEnv
+
+# Wrappers (for RL training)
+from .wrappers import (
+    MultiAgentWrapper,
+    RewardWrapper,
+    DiscreteObservationWrapper,
+    DiscreteActionWrapper,
+    UnitWrapper,
+    CohesionRewardWrapper,
+    ChebyshevRewardWrapper,
+    MovementObservationWrapper,
+    EmptyTerrainWrapper,
+)
+
 # Agent system
 from .agent import Agent, spawn_team, spawn_all_teams
+
+# Unit system
+from .unit import (
+    Unit,
+    spawn_unit,
+    spawn_units_for_team,
+    spawn_all_units,
+    get_all_agents_from_units,
+    get_unit_for_agent,
+)
 
 # Terrain system
 from .terrain import TerrainType, TerrainGrid
@@ -76,6 +114,17 @@ from .fov import (
     get_fov_cache
 )
 
+# Boids flocking
+from .boids import (
+    calculate_cohesion_force,
+    calculate_separation_force,
+    calculate_alignment_force,
+    calculate_waypoint_force,
+    calculate_boids_steering,
+    steering_to_orientation,
+    blend_steering_with_random,
+)
+
 # Configuration (for advanced users)
 from . import config
 
@@ -88,11 +137,38 @@ __all__ = [
     "TacticalCombatEnv",
     "EnvConfig",
     "OBS_SIZE",
+    "GridWorld",
+    "StrategicCombatEnv",
+    # Factory functions
+    "create_minimal_env",
+    "create_terrain_env",
+    "create_combat_env",
+    "create_full_env",
+    "create_tactical_env",
+
+    # Wrappers
+    "MultiAgentWrapper",
+    "RewardWrapper",
+    "DiscreteObservationWrapper",
+    "DiscreteActionWrapper",
+    "UnitWrapper",
+    "CohesionRewardWrapper",
+    "ChebyshevRewardWrapper",
+    "MovementObservationWrapper",
+    "EmptyTerrainWrapper",
 
     # Agents
     "Agent",
     "spawn_team",
     "spawn_all_teams",
+
+    # Units
+    "Unit",
+    "spawn_unit",
+    "spawn_units_for_team",
+    "spawn_all_units",
+    "get_all_agents_from_units",
+    "get_unit_for_agent",
 
     # Terrain
     "TerrainType",
@@ -121,6 +197,15 @@ __all__ = [
     "angle_difference",
     "FOVCache",
     "get_fov_cache",
+
+    # Boids
+    "calculate_cohesion_force",
+    "calculate_separation_force",
+    "calculate_alignment_force",
+    "calculate_waypoint_force",
+    "calculate_boids_steering",
+    "steering_to_orientation",
+    "blend_steering_with_random",
 
     # Modules
     "config",

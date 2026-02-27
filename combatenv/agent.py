@@ -82,7 +82,9 @@ from .config import (
     AGENT_MAX_AMMO,
     MAGAZINE_SIZE,
     RELOAD_TIME,
-    AUTO_RELOAD_ON_EMPTY
+    AUTO_RELOAD_ON_EMPTY,
+    FOREST_SPEED_MULTIPLIER,
+    WATER_SPEED_MULTIPLIER,
 )
 
 
@@ -115,7 +117,13 @@ class Agent:
     magazine_ammo: int = MAGAZINE_SIZE
     reload_timer: float = 0.0
     # Terrain effects
-    stuck_steps: int = 0  # Steps remaining until freed from swamp
+    in_forest: bool = False  # Agent is in forest terrain (50% speed, reduced detection)
+    in_water: bool = False   # Agent is in water terrain (50% speed, no shooting, invisible)
+    # Unit membership
+    unit_id: Optional[int] = None  # Which unit this agent belongs to
+    following_unit: bool = True    # Whether agent is following unit waypoint
+    # Combat stats
+    kills: int = 0  # Number of enemies killed by this agent
 
     def __post_init__(self):
         """Normalize orientation to 0-360 range on initialization."""
@@ -139,6 +147,12 @@ class Agent:
         if self.has_low_stamina:
             actual_speed *= MOVEMENT_SPEED_PENALTY_LOW_STAMINA
 
+        # Apply terrain speed penalties
+        if self.in_forest:
+            actual_speed *= FOREST_SPEED_MULTIPLIER
+        if self.in_water:
+            actual_speed *= WATER_SPEED_MULTIPLIER
+
         # Convert orientation to radians (pygame coordinate system)
         rad = math.radians(self.orientation)
         dx = math.cos(rad) * actual_speed * dt
@@ -151,12 +165,52 @@ class Agent:
         new_x = max(BOUNDARY_MARGIN, min(GRID_SIZE - BOUNDARY_MARGIN, new_x))
         new_y = max(BOUNDARY_MARGIN, min(GRID_SIZE - BOUNDARY_MARGIN, new_y))
 
-        # Check collision with buildings (terrain)
+        # Check collision with buildings (terrain) - bounce off walls
         if terrain_grid:
             new_cell_x = math.floor(new_x)
             new_cell_y = math.floor(new_y)
-            if not terrain_grid.is_walkable(new_cell_x, new_cell_y):
-                return False  # Movement blocked by building
+
+            # Helper to check if position is safe (walkable and not fire)
+            def is_safe(cx, cy):
+                if not terrain_grid.is_walkable(cx, cy):
+                    return False
+                # Also avoid fire terrain
+                from combatenv.terrain import TerrainType
+                if terrain_grid.get(cx, cy) == TerrainType.FIRE:
+                    return False
+                return True
+
+            if not is_safe(new_cell_x, new_cell_y):
+                # Bounce: determine which axis to reflect
+                old_cell_x = math.floor(self.position[0])
+                old_cell_y = math.floor(self.position[1])
+
+                # Try moving only in X
+                x_only_safe = is_safe(new_cell_x, old_cell_y)
+                # Try moving only in Y
+                y_only_safe = is_safe(old_cell_x, new_cell_y)
+
+                if x_only_safe and not y_only_safe:
+                    # Hit horizontal wall - reflect Y, keep X movement
+                    new_y = self.position[1] - dy  # Bounce back in Y
+                    self.orientation = -self.orientation % 360  # Reflect angle
+                elif y_only_safe and not x_only_safe:
+                    # Hit vertical wall - reflect X, keep Y movement
+                    new_x = self.position[0] - dx  # Bounce back in X
+                    self.orientation = (180 - self.orientation) % 360  # Reflect angle
+                else:
+                    # Corner or both blocked - bounce back completely
+                    new_x = self.position[0] - dx
+                    new_y = self.position[1] - dy
+                    self.orientation = (self.orientation + 180) % 360  # Turn around
+
+                # Clamp to boundaries after bounce
+                new_x = max(BOUNDARY_MARGIN, min(GRID_SIZE - BOUNDARY_MARGIN, new_x))
+                new_y = max(BOUNDARY_MARGIN, min(GRID_SIZE - BOUNDARY_MARGIN, new_y))
+
+                # Verify bounce position is safe
+                if not is_safe(math.floor(new_x), math.floor(new_y)):
+                    return False  # Still blocked, don't move
 
         # Check collision with other agents (optional)
         if other_agents:
@@ -385,13 +439,12 @@ class Agent:
 
     @property
     def is_stuck(self) -> bool:
-        """Check if agent is stuck in swamp terrain."""
-        return self.stuck_steps > 0
+        """Check if agent is stuck. (Deprecated - always returns False)"""
+        return False
 
     def update_stuck(self) -> None:
-        """Decrement stuck timer by one step."""
-        if self.stuck_steps > 0:
-            self.stuck_steps -= 1
+        """Deprecated - no longer used since swamp was replaced with forest."""
+        pass
 
     def apply_terrain_damage(self, damage: int) -> None:
         """
@@ -405,7 +458,10 @@ class Agent:
         """
         if damage < 0:
             raise ValueError(f"Damage must be non-negative, got {damage}")
+        old_health = self.health
         self.health = max(0, self.health - damage)
+        if self.health <= 0 and old_health > 0:
+            print(f"DEBUG: Agent died from terrain damage at {self.position}")
 
     def take_damage(self, damage: int) -> None:
         """
@@ -420,6 +476,8 @@ class Agent:
         if damage < 0:
             raise ValueError(f"Damage must be non-negative, got {damage}")
 
+        old_health = self.health
+
         # Armor absorbs damage first
         if self.armor > 0:
             armor_damage = min(damage, self.armor)
@@ -429,6 +487,9 @@ class Agent:
         # Remaining damage goes to health
         if damage > 0:
             self.health = max(0, self.health - damage)
+
+        if self.health <= 0 and old_health > 0:
+            print(f"DEBUG: Agent died from take_damage (projectile?) at {self.position}")
 
     def update_cooldown(self, dt: float) -> None:
         """
@@ -441,12 +502,13 @@ class Agent:
             self.shoot_cooldown = max(0, self.shoot_cooldown - dt)
 
     def can_shoot(self) -> bool:
-        """Check if agent can shoot (alive, not on cooldown, has ammo, not reloading)."""
+        """Check if agent can shoot (alive, not on cooldown, has ammo, not reloading, not in water)."""
         return (
             self.is_alive and
             self.shoot_cooldown <= 0 and
             self.magazine_ammo > 0 and
-            not self.is_reloading
+            not self.is_reloading and
+            not self.in_water  # Cannot shoot while in water
         )
 
     def get_targets_in_fov(self, potential_targets: List['Agent'], terrain_grid=None) -> Tuple[List['Agent'], List['Agent']]:
@@ -626,7 +688,8 @@ class Agent:
         self.magazine_ammo = MAGAZINE_SIZE
         self.reload_timer = 0.0
         self.shoot_cooldown = 0.0
-        self.stuck_steps = 0
+        self.in_forest = False
+        self.in_water = False
 
         # Move to spawn quadrant (use BOUNDARY_MARGIN for consistency)
         margin = BOUNDARY_MARGIN * 4  # Keep away from edges
@@ -737,13 +800,11 @@ def spawn_team(team: TeamType, num_agents: int = NUM_AGENTS_PER_TEAM, terrain_gr
         x = random.uniform(x_min, x_max)
         y = random.uniform(y_min, y_max)
 
-        # Check terrain - only spawn on empty/walkable terrain
+        # Check terrain - only spawn on walkable terrain (not buildings)
         if terrain_grid:
             cell_x, cell_y = int(x), int(y)
-            from .terrain import TerrainType
-            terrain = terrain_grid.get(cell_x, cell_y)
-            if terrain != TerrainType.EMPTY:
-                continue  # Skip non-empty terrain
+            if not terrain_grid.is_walkable(cell_x, cell_y):
+                continue  # Skip non-walkable terrain (buildings)
 
         # Check for overlap with existing agents (using AGENT_SPAWN_SPACING)
         too_close = False
@@ -888,14 +949,11 @@ if __name__ == "__main__":
             team="blue"
         )
 
+        # is_stuck is deprecated (always False)
         assert agent.is_stuck == False
-
-        agent.stuck_steps = 30
-        assert agent.is_stuck == True
-
-        agent.update_stuck()
-        assert agent.stuck_steps == 29
-        print("  agent stuck: OK")
+        agent.update_stuck()  # No-op
+        assert agent.is_stuck == False
+        print("  agent stuck (deprecated): OK")
 
     def test_spawn_team():
         """Test team spawning."""
@@ -940,14 +998,14 @@ if __name__ == "__main__":
         agent.health = 0
         agent.stamina = 0
         agent.armor = 0
-        agent.stuck_steps = 50
+        agent.in_forest = True
 
         agent.respawn()
 
         assert agent.health == AGENT_MAX_HEALTH
         assert agent.stamina == AGENT_MAX_STAMINA
         assert agent.armor == AGENT_MAX_ARMOR
-        assert agent.stuck_steps == 0
+        assert agent.in_forest == False
         print("  respawn: OK")
 
     # Run all tests

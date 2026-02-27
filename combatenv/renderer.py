@@ -47,13 +47,14 @@ Example:
 import pygame
 import math
 import random
-from typing import List, Set, Tuple, Dict, Any, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .config import (
     WINDOW_SIZE,
     CELL_SIZE,
     GRID_SIZE,
     GRID_LINE_WIDTH,
+    TACTICAL_CELLS_PER_OPERATIONAL,
     COLOR_BACKGROUND,
     COLOR_GRID_LINES,
     COLOR_BLUE_TEAM,
@@ -64,9 +65,9 @@ from .config import (
     FOV_PURPLE_ALPHA,
     AGENT_SIZE_RATIO,
     AGENT_NOSE_RATIO,
-    COLOR_BUILDING,
+    COLOR_OBSTACLE,
     COLOR_FIRE,
-    COLOR_SWAMP,
+    COLOR_FOREST,
     COLOR_WATER
 )
 
@@ -81,7 +82,11 @@ _OVERLAP_MIXED_OVERLAY = None
 _OVERLAP_FAR_FAR_OVERLAY = None
 
 # Grid line surface (cached for performance)
+# Set to None to force regeneration on color changes
 _GRID_LINE_SURFACE = None
+
+# Cached terrain surface (rebuilt when terrain_grid._surface_dirty is True)
+_TERRAIN_SURFACE = None
 
 
 def _ensure_surfaces_initialized():
@@ -144,7 +149,7 @@ def render_grid_lines(surface: pygame.Surface) -> None:
     # Lazy initialization of grid line surface (created once)
     if _GRID_LINE_SURFACE is None:
         _GRID_LINE_SURFACE = pygame.Surface((WINDOW_SIZE, WINDOW_SIZE), pygame.SRCALPHA)
-        grid_color = (*COLOR_GRID_LINES, 128)  # 50% transparency
+        grid_color = (*COLOR_GRID_LINES, 40)  # ~15% transparency
 
         # Draw vertical lines
         for x in range(0, GRID_SIZE + 1):
@@ -171,44 +176,262 @@ def render_grid_lines(surface: pygame.Surface) -> None:
     surface.blit(_GRID_LINE_SURFACE, (0, 0))
 
 
-def render_terrain(surface: pygame.Surface, terrain_grid) -> None:
+def render_operational_grid(surface: pygame.Surface) -> None:
     """
-    Render terrain cells (buildings, fire, swamp, water).
+    Render medium lines for the 8x8 operational grid overlay.
 
-    Terrain is rendered as filled rectangles:
-    - Buildings: Dark gray
-    - Fire: Orange
-    - Swamp: Dark green
-    - Water: Blue
+    The operational grid divides the 64x64 tactical grid into 64 cells
+    of 8x8 tactical cells each.
 
     Args:
         surface: Pygame surface to draw on
-        terrain_grid: TerrainGrid object containing terrain data
     """
-    from .terrain import TerrainType
+    from .config import (
+        OPERATIONAL_GRID_SIZE,
+        TACTICAL_CELLS_PER_OPERATIONAL,
+        OPERATIONAL_GRID_COLOR,
+        OPERATIONAL_GRID_LINE_WIDTH,
+    )
 
-    for x in range(GRID_SIZE):
-        for y in range(GRID_SIZE):
-            terrain = terrain_grid.get(x, y)
+    op_cell_pixels = TACTICAL_CELLS_PER_OPERATIONAL * CELL_SIZE
 
-            if terrain == TerrainType.EMPTY:
-                continue
+    # Draw vertical lines
+    for i in range(OPERATIONAL_GRID_SIZE + 1):
+        x = i * op_cell_pixels
+        pygame.draw.line(
+            surface,
+            OPERATIONAL_GRID_COLOR,
+            (x, 0),
+            (x, WINDOW_SIZE),
+            OPERATIONAL_GRID_LINE_WIDTH
+        )
 
-            if terrain == TerrainType.BUILDING:
-                color = COLOR_BUILDING
-            elif terrain == TerrainType.FIRE:
-                color = COLOR_FIRE
-            elif terrain == TerrainType.SWAMP:
-                color = COLOR_SWAMP
-            elif terrain == TerrainType.WATER:
-                color = COLOR_WATER
+    # Draw horizontal lines
+    for i in range(OPERATIONAL_GRID_SIZE + 1):
+        y = i * op_cell_pixels
+        pygame.draw.line(
+            surface,
+            OPERATIONAL_GRID_COLOR,
+            (0, y),
+            (WINDOW_SIZE, y),
+            OPERATIONAL_GRID_LINE_WIDTH
+        )
+
+
+def render_strategic_grid(surface: pygame.Surface) -> None:
+    """
+    Render thick lines for the 4x4 strategic grid overlay.
+
+    The strategic grid divides the 64x64 tactical grid into 16 cells
+    of 16x16 tactical cells each. Lines are thicker and more visible
+    than the operational grid lines.
+
+    Args:
+        surface: Pygame surface to draw on
+    """
+    from .config import (
+        STRATEGIC_GRID_SIZE,
+        TACTICAL_CELLS_PER_STRATEGIC,
+        STRATEGIC_GRID_COLOR,
+        STRATEGIC_GRID_LINE_WIDTH,
+    )
+
+    strategic_cell_pixels = TACTICAL_CELLS_PER_STRATEGIC * CELL_SIZE
+
+    # Draw vertical lines
+    for i in range(STRATEGIC_GRID_SIZE + 1):
+        x = i * strategic_cell_pixels
+        pygame.draw.line(
+            surface,
+            STRATEGIC_GRID_COLOR,
+            (x, 0),
+            (x, WINDOW_SIZE),
+            STRATEGIC_GRID_LINE_WIDTH
+        )
+
+    # Draw horizontal lines
+    for i in range(STRATEGIC_GRID_SIZE + 1):
+        y = i * strategic_cell_pixels
+        pygame.draw.line(
+            surface,
+            STRATEGIC_GRID_COLOR,
+            (0, y),
+            (WINDOW_SIZE, y),
+            STRATEGIC_GRID_LINE_WIDTH
+        )
+
+
+def render_waypoints(
+    surface: pygame.Surface,
+    units: List,
+    selected_unit_id: Optional[int] = None,
+    show_waypoints: bool = True,
+    show_goals: bool = True
+) -> None:
+    """
+    Render unit waypoints and unit IDs for debugging.
+
+    Args:
+        surface: Pygame surface to draw on
+        units: List of Unit instances to render waypoints for
+        selected_unit_id: ID of currently selected unit (highlighted differently)
+        show_waypoints: Whether to show intermediate waypoint lines (W key)
+        show_goals: Whether to show goal waypoint lines (SHIFT+W key)
+    """
+    font = pygame.font.Font(None, 20)
+
+    for unit in units:
+        if not unit.alive_agents:
+            continue
+
+        centroid = unit.centroid
+        centroid_px = (int(centroid[0] * CELL_SIZE), int(centroid[1] * CELL_SIZE))
+
+        # Determine color based on team
+        if unit.team == "blue":
+            base_color = (100, 100, 255)
+            waypoint_color = (0, 150, 255)
+        else:
+            base_color = (255, 100, 100)
+            waypoint_color = (255, 150, 0)
+
+        # Highlight selected unit
+        is_selected = (selected_unit_id is not None and unit.id == selected_unit_id)
+        if is_selected:
+            if unit.team == "blue":
+                base_color = (135, 206, 250)  # Light blue for selected blue
+                waypoint_color = (135, 206, 250)
             else:
-                continue
+                base_color = (255, 165, 0)  # Orange for selected red
+                waypoint_color = (255, 165, 0)
 
-            # Draw filled rectangle
-            pixel_x = x * CELL_SIZE
-            pixel_y = y * CELL_SIZE
-            pygame.draw.rect(surface, color, (pixel_x, pixel_y, CELL_SIZE, CELL_SIZE))
+        # Draw unit ID at centroid (uppercase for blue, lowercase for red)
+        if unit.team == "blue":
+            unit_label = f"U{unit.id}"
+        else:
+            unit_label = f"u{unit.id}"
+        text = font.render(unit_label, True, base_color)
+        surface.blit(text, (centroid_px[0] - 8, centroid_px[1] - 20))
+
+        # Draw goal waypoint (diamond shape) - toggled with SHIFT+W
+        goal = getattr(unit, 'goal_waypoint', None)
+        if goal is not None and show_goals:
+            goal_px = (int(goal[0] * CELL_SIZE), int(goal[1] * CELL_SIZE))
+
+            # Draw dashed line from centroid to goal (use dots for dashed effect)
+            # Use same color as intermediate waypoint for consistency
+            dx = goal_px[0] - centroid_px[0]
+            dy = goal_px[1] - centroid_px[1]
+            dist = max(1, int((dx**2 + dy**2)**0.5))
+            for i in range(0, dist, 12):  # Dashed line
+                t = i / dist
+                x = int(centroid_px[0] + dx * t)
+                y = int(centroid_px[1] + dy * t)
+                pygame.draw.circle(surface, waypoint_color, (x, y), 2)
+
+            # Draw goal marker (diamond shape)
+            size = 10
+            pygame.draw.polygon(surface, waypoint_color, [
+                (goal_px[0], goal_px[1] - size),      # Top
+                (goal_px[0] + size, goal_px[1]),      # Right
+                (goal_px[0], goal_px[1] + size),      # Bottom
+                (goal_px[0] - size, goal_px[1]),      # Left
+            ], 3)
+
+            # Draw goal label (uppercase for blue, lowercase for red)
+            if unit.team == "blue":
+                goal_label = f"G{unit.id}"
+            else:
+                goal_label = f"g{unit.id}"
+            goal_text = font.render(goal_label, True, waypoint_color)
+            surface.blit(goal_text, (goal_px[0] + 12, goal_px[1] - 12))
+
+        # Draw intermediate waypoint if set (X shape) - toggled with W
+        if unit.waypoint is not None and show_waypoints:
+            wp_px = (int(unit.waypoint[0] * CELL_SIZE), int(unit.waypoint[1] * CELL_SIZE))
+
+            # Draw solid line from centroid to intermediate waypoint
+            pygame.draw.line(surface, waypoint_color, centroid_px, wp_px, 2)
+
+            # Draw waypoint marker (X shape)
+            size = 6
+            pygame.draw.line(surface, waypoint_color,
+                           (wp_px[0] - size, wp_px[1] - size),
+                           (wp_px[0] + size, wp_px[1] + size), 2)
+            pygame.draw.line(surface, waypoint_color,
+                           (wp_px[0] + size, wp_px[1] - size),
+                           (wp_px[0] - size, wp_px[1] + size), 2)
+
+
+def render_selected_unit(
+    surface: pygame.Surface,
+    unit,
+    circle_color: Tuple[int, int, int] = (135, 206, 250)
+) -> None:
+    """
+    Render circles around each agent in the selected unit (alive and dead).
+
+    Args:
+        surface: Pygame surface to draw on
+        unit: Unit instance whose agents should be highlighted
+        circle_color: Color for the highlight circles (light blue for blue, orange for red)
+    """
+    if unit is None:
+        return
+
+    for agent in unit.agents:
+        # Convert grid position to pixel position
+        px = int(agent.position[0] * CELL_SIZE)
+        py = int(agent.position[1] * CELL_SIZE)
+
+        if agent.is_alive:
+            # Full color for alive agents
+            pygame.draw.circle(surface, circle_color, (px, py), 12, 2)
+        else:
+            # Dimmer color for dead agents
+            dim_color = (circle_color[0] // 2, circle_color[1] // 2, circle_color[2] // 2)
+            pygame.draw.circle(surface, dim_color, (px, py), 12, 1)
+
+
+def render_terrain(surface: pygame.Surface, terrain_grid) -> None:
+    """
+    Render terrain at pixel level using surfarray for performance.
+
+    Uses a color lookup table to map the 1024x1024 terrain grid directly
+    to RGB pixels. The rendered surface is cached and only rebuilt when
+    terrain changes (checked via _surface_dirty flag).
+
+    Args:
+        surface: Pygame surface to draw on
+        terrain_grid: TerrainGrid object containing pixel-level terrain data
+    """
+    import numpy as np
+    global _TERRAIN_SURFACE
+
+    # Check if we need to rebuild the cached surface
+    if _TERRAIN_SURFACE is None or terrain_grid._surface_dirty:
+        # Color lookup table indexed by TerrainType value
+        lut = np.array([
+            COLOR_BACKGROUND,  # EMPTY (0)
+            COLOR_OBSTACLE,    # OBSTACLE (1)
+            COLOR_FIRE,        # FIRE (2)
+            COLOR_FOREST,      # FOREST (3)
+            COLOR_WATER,       # WATER (4)
+        ], dtype=np.uint8)
+
+        # Map terrain grid to RGB: (1024, 1024) -> (1024, 1024, 3)
+        rgb = lut[terrain_grid.grid]
+
+        # Create or reuse cached surface
+        if _TERRAIN_SURFACE is None:
+            _TERRAIN_SURFACE = pygame.Surface(
+                (terrain_grid.pixel_width, terrain_grid.pixel_height)
+            )
+
+        pygame.surfarray.blit_array(_TERRAIN_SURFACE, rgb)
+        terrain_grid._surface_dirty = False
+
+    surface.blit(_TERRAIN_SURFACE, (0, 0))
 
 
 def render_fov_highlights(
@@ -248,6 +471,15 @@ def render_fov_highlights(
     """
     # Ensure overlay surfaces are initialized
     _ensure_surfaces_initialized()
+
+    # Assert surfaces are initialized (for type checker)
+    assert _BLUE_FAR_OVERLAY is not None
+    assert _BLUE_NEAR_OVERLAY is not None
+    assert _RED_FAR_OVERLAY is not None
+    assert _RED_NEAR_OVERLAY is not None
+    assert _OVERLAP_FAR_FAR_OVERLAY is not None
+    assert _OVERLAP_MIXED_OVERLAY is not None
+    assert _OVERLAP_NEAR_NEAR_OVERLAY is not None
 
     # Render far FOV first (lighter, in the background)
     for cell_x, cell_y in blue_far_cells:
@@ -291,7 +523,7 @@ def render_fov_highlights(
         surface.blit(_OVERLAP_NEAR_NEAR_OVERLAY, (pixel_x, pixel_y))
 
 
-def render_agent(surface: pygame.Surface, agent) -> None:
+def render_agent(surface: pygame.Surface, agent, terrain_grid=None, highlight: bool = False) -> None:
     """
     Render a single agent as a filled circle with orientation indicator.
 
@@ -299,12 +531,17 @@ def render_agent(surface: pygame.Surface, agent) -> None:
     - A filled circle in the agent's team color (70% of cell size)
     - A "nose" line extending from center to show orientation
     - Dead agents are rendered in gray without orientation indicator
+    - Agents in water or forest are rendered with transparency
+    - Highlighted agents have a yellow border
 
     Args:
         surface: Pygame surface to draw on (typically the main screen)
         agent: Agent object with position, orientation, team, and health attributes
+        terrain_grid: Optional TerrainGrid to check if agent is underwater
+        highlight: If True, draw yellow border around agent
     """
     from .config import COLOR_DEAD_AGENT
+    from .terrain import TerrainType
 
     # Convert grid position to pixel coordinates (center of circle)
     pixel_x = int(agent.position[0] * CELL_SIZE)
@@ -314,28 +551,44 @@ def render_agent(surface: pygame.Surface, agent) -> None:
     # Calculate circle radius (70% of cell size)
     radius = int((CELL_SIZE / 2) * AGENT_SIZE_RATIO)
 
+    # Check if agent is underwater or in forest
+    is_transparent = False
+    if terrain_grid is not None:
+        grid_x = int(agent.position[0])
+        grid_y = int(agent.position[1])
+        terrain = terrain_grid.get(grid_x, grid_y)
+        is_transparent = terrain in (TerrainType.WATER, TerrainType.FOREST)
+
     if agent.is_alive:
         # Determine color based on team
         color = COLOR_BLUE_TEAM if agent.team == "blue" else COLOR_RED_TEAM
 
-        # Draw the agent body as a filled circle
-        pygame.draw.circle(surface, color, center, radius)
+        if is_transparent:
+            # Underwater or in forest: render with transparency
+            agent_surface = pygame.Surface((radius * 2 + 2, radius * 2 + 2), pygame.SRCALPHA)
+            pygame.draw.circle(agent_surface, (*color, 100), (radius + 1, radius + 1), radius)
+            # Draw nose with transparency
+            nose_length = (CELL_SIZE / 2) * AGENT_NOSE_RATIO
+            orientation_rad = math.radians(agent.orientation)
+            nose_end_x = radius + 1 + int(math.cos(orientation_rad) * (radius + nose_length))
+            nose_end_y = radius + 1 + int(math.sin(orientation_rad) * (radius + nose_length))
+            pygame.draw.line(agent_surface, (*color, 100), (radius + 1, radius + 1), (nose_end_x, nose_end_y), 2)
+            surface.blit(agent_surface, (pixel_x - radius - 1, pixel_y - radius - 1))
+        else:
+            # Normal rendering
+            pygame.draw.circle(surface, color, center, radius)
 
-        # Draw orientation "nose" line
-        # The nose extends from center outward beyond the circle edge
-        nose_length = (CELL_SIZE / 2) * AGENT_NOSE_RATIO
+            # Draw orientation "nose" line
+            nose_length = (CELL_SIZE / 2) * AGENT_NOSE_RATIO
+            orientation_rad = math.radians(agent.orientation)
+            nose_end_x = pixel_x + int(math.cos(orientation_rad) * (radius + nose_length))
+            nose_end_y = pixel_y + int(math.sin(orientation_rad) * (radius + nose_length))
+            nose_end = (nose_end_x, nose_end_y)
+            pygame.draw.line(surface, color, center, nose_end, 2)
 
-        # Convert orientation to radians for trigonometry
-        # Orientation is in degrees: 0=right, 90=down, 180=left, 270=up
-        orientation_rad = math.radians(agent.orientation)
-
-        # Calculate nose endpoint
-        nose_end_x = pixel_x + int(math.cos(orientation_rad) * (radius + nose_length))
-        nose_end_y = pixel_y + int(math.sin(orientation_rad) * (radius + nose_length))
-        nose_end = (nose_end_x, nose_end_y)
-
-        # Draw nose line (thicker than grid lines for visibility)
-        pygame.draw.line(surface, color, center, nose_end, 2)
+        # Draw yellow highlight border if requested (for both transparent and normal)
+        if highlight:
+            pygame.draw.circle(surface, (255, 255, 0), center, radius + 2, 2)
     else:
         # Dead agent: gray with transparency, no nose
         dead_surface = pygame.Surface((radius * 2 + 2, radius * 2 + 2), pygame.SRCALPHA)
@@ -343,7 +596,7 @@ def render_agent(surface: pygame.Surface, agent) -> None:
         surface.blit(dead_surface, (pixel_x - radius - 1, pixel_y - radius - 1))
 
 
-def render_agents(surface: pygame.Surface, agents: List) -> None:
+def render_agents(surface: pygame.Surface, agents: List, terrain_grid=None) -> None:
     """
     Render all agents in a list.
 
@@ -354,14 +607,15 @@ def render_agents(surface: pygame.Surface, agents: List) -> None:
     Args:
         surface: Pygame surface to draw on (typically the main screen)
         agents: List of Agent objects to render
+        terrain_grid: Optional TerrainGrid for underwater transparency
     """
     # Render dead agents first (lower z-order), then live agents on top
     for agent in agents:
         if not agent.is_alive:
-            render_agent(surface, agent)
+            render_agent(surface, agent, terrain_grid)
     for agent in agents:
         if agent.is_alive:
-            render_agent(surface, agent)
+            render_agent(surface, agent, terrain_grid)
 
 
 def render_projectile(surface: pygame.Surface, projectile) -> None:
@@ -419,10 +673,6 @@ def render_muzzle_flash(
         rng: Optional random.Random instance for deterministic testing.
              If None, uses the global random module.
     """
-    # Use provided RNG or fall back to global random
-    if rng is None:
-        rng = random
-
     # Convert grid position to pixel coordinates
     pixel_x = int(position[0] * CELL_SIZE)
     pixel_y = int(position[1] * CELL_SIZE)
@@ -434,12 +684,17 @@ def render_muzzle_flash(
     num_particles = 4
     for i in range(num_particles):
         angle = (i / num_particles) * 360
-        distance = rng.uniform(1, 3)  # pixels from center
+        # Use provided RNG or fall back to global random
+        if rng is not None:
+            distance = rng.uniform(1, 3)
+            color = rng.choice(colors)
+            radius = rng.randint(1, 2)
+        else:
+            distance = random.uniform(1, 3)
+            color = random.choice(colors)
+            radius = random.randint(1, 2)
         particle_x = int(pixel_x + math.cos(math.radians(angle)) * distance)
         particle_y = int(pixel_y + math.sin(math.radians(angle)) * distance)
-
-        color = rng.choice(colors)
-        radius = rng.randint(1, 2)
         pygame.draw.circle(surface, color, (particle_x, particle_y), radius)
 
     # Draw bright center
@@ -476,14 +731,15 @@ def render_all(
     overlap_far_far: Set[Tuple[int, int]],
     projectiles: List,
     muzzle_flashes: List,
-    terrain_grid=None
+    terrain_grid=None,
+    show_strategic_grid: bool = False
 ) -> None:
     """
     Complete rendering pipeline for the entire game scene.
 
     Renders all visual elements in the correct order:
     1. Background (white)
-    2. Terrain (buildings, fire, swamp)
+    2. Terrain (buildings, fire, forest)
     3. Grid lines (faint gray)
     4. FOV highlights (layered: far FOV lighter, near FOV darker, overlaps by layer)
     5. Agents (circles with orientation indicators)
@@ -511,12 +767,16 @@ def render_all(
     # Layer 1: Background
     render_background(surface)
 
-    # Layer 2: Terrain (buildings, fire, swamp)
+    # Layer 2: Terrain (buildings, fire, forest)
     if terrain_grid:
         render_terrain(surface, terrain_grid)
 
     # Layer 3: Grid lines
     render_grid_lines(surface)
+
+    # Layer 3.5: Strategic grid overlay (thick lines for 4x4 grid)
+    if show_strategic_grid:
+        render_strategic_grid(surface)
 
     # Layer 4: FOV highlights (layered: far lighter, near darker, overlaps by layer)
     render_fov_highlights(surface, blue_near_cells, blue_far_cells,
@@ -554,7 +814,7 @@ def render_debug_overlay(surface: pygame.Surface, debug_info: Dict[str, Any]) ->
     try:
         # Create semi-transparent background panel
         panel_width = 320
-        panel_height = 400
+        panel_height = 580  # Increased to fit agent rewards
         panel = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
         panel.fill((0, 0, 0, 180))  # Dark semi-transparent background
 
@@ -665,6 +925,86 @@ def render_debug_overlay(surface: pygame.Surface, debug_info: Dict[str, Any]) ->
             kills_text2 = value_font.render(f"  Red Kills: {red_kills}", True, (255, 100, 100))
             panel.blit(kills_text2, (20, y_offset))
 
+        # Reward statistics (if provided)
+        if 'step_reward' in debug_info or 'episode_reward' in debug_info:
+            y_offset += line_height + 10
+            reward_title = label_font.render("Rewards:", True, (200, 200, 200))
+            panel.blit(reward_title, (10, y_offset))
+            y_offset += line_height
+
+            step_reward = debug_info.get('step_reward', 0.0)
+            episode_reward = debug_info.get('episode_reward', 0.0)
+
+            step_color = (100, 255, 100) if step_reward >= 0 else (255, 100, 100)
+            step_text = value_font.render(f"  Step: {step_reward:+.2f}", True, step_color)
+            panel.blit(step_text, (20, y_offset))
+            y_offset += line_height
+
+            episode_color = (100, 255, 100) if episode_reward >= 0 else (255, 100, 100)
+            episode_text = value_font.render(f"  Episode: {episode_reward:+.2f}", True, episode_color)
+            panel.blit(episode_text, (20, y_offset))
+
+        # Selected unit (if provided)
+        if 'selected_unit' in debug_info:
+            y_offset += line_height + 10
+            selected = debug_info.get('selected_unit')
+            if selected is not None:
+                unit_text = value_font.render(f"Selected Unit: {selected}", True, (255, 255, 0))
+            else:
+                unit_text = value_font.render("Selected Unit: None", True, (150, 150, 150))
+            panel.blit(unit_text, (10, y_offset))
+
+        # Agent rewards (if provided by multi-agent wrapper)
+        agent_rewards = debug_info.get('agent_rewards', {})
+        agent_list = debug_info.get('agent_list', [])
+        if agent_rewards and agent_list:
+            y_offset += line_height + 10
+            rewards_title = label_font.render("Agent Rewards:", True, (200, 200, 200))
+            panel.blit(rewards_title, (10, y_offset))
+            y_offset += line_height
+
+            # Calculate totals per team
+            blue_total = 0.0
+            red_total = 0.0
+            n_blue = len([a for a in agent_list if a.team == "blue"])
+
+            for idx, reward in agent_rewards.items():
+                if idx < n_blue:
+                    blue_total += reward
+                else:
+                    red_total += reward
+
+            # Show team totals
+            blue_reward_text = value_font.render(f"  Blue Total: {blue_total:+.1f}", True, (100, 100, 255))
+            panel.blit(blue_reward_text, (20, y_offset))
+            y_offset += line_height
+
+            red_reward_text = value_font.render(f"  Red Total: {red_total:+.1f}", True, (255, 100, 100))
+            panel.blit(red_reward_text, (20, y_offset))
+            y_offset += line_height
+
+            # Show per-agent rewards (first few of each team)
+            small_font = pygame.font.Font(None, 18)
+            y_offset += 5
+
+            # Blue agents (show first 4)
+            blue_agents_rewards = [(idx, r) for idx, r in agent_rewards.items() if idx < n_blue]
+            for idx, reward in blue_agents_rewards[:4]:
+                agent = agent_list[idx]
+                status = "✓" if agent.is_alive else "✗"
+                r_text = small_font.render(f"  B{idx}: {reward:+.1f} {status}", True, (80, 80, 200))
+                panel.blit(r_text, (20, y_offset))
+                y_offset += 16
+
+            # Red agents (show first 4)
+            red_agents_rewards = [(idx, r) for idx, r in agent_rewards.items() if idx >= n_blue]
+            for idx, reward in red_agents_rewards[:4]:
+                agent = agent_list[idx]
+                status = "✓" if agent.is_alive else "✗"
+                r_text = small_font.render(f"  R{idx-n_blue}: {reward:+.1f} {status}", True, (200, 80, 80))
+                panel.blit(r_text, (20, y_offset))
+                y_offset += 16
+
         # Blit panel to screen (top-left corner)
         surface.blit(panel, (10, 10))
 
@@ -683,9 +1023,28 @@ def render_keybindings_overlay(surface: pygame.Surface) -> None:
         surface: Pygame surface to draw on
     """
     try:
+        # Define keybindings
+        keybindings = [
+            ("Shift+Q", "Exit game"),
+            ("`", "Toggle debug info"),
+            ("F", "Toggle FOV overlay"),
+            ("G", "Toggle strategic grid"),
+            ("R", "Toggle rewards overlay"),
+            ("?", "Toggle this help"),
+            ("1-8", "Select blue unit"),
+            ("Shift+1-8", "Select red unit"),
+            ("SPACE", "Clear waypoint(s)"),
+            ("Click", "Set waypoint"),
+        ]
+
+        # Calculate panel height based on content
+        line_height = 30
+        title_height = 60
+        footer_height = 50
+        panel_height = title_height + len(keybindings) * line_height + footer_height
+
         # Create semi-transparent background panel (centered)
         panel_width = 400
-        panel_height = 300
         panel_x = (WINDOW_SIZE - panel_width) // 2
         panel_y = (WINDOW_SIZE - panel_height) // 2
 
@@ -705,17 +1064,8 @@ def render_keybindings_overlay(surface: pygame.Surface) -> None:
         title_rect = title.get_rect(centerx=panel_width // 2, y=20)
         panel.blit(title, title_rect)
 
-        # Define keybindings
-        keybindings = [
-            ("Shift+Q", "Exit game"),
-            ("`", "Toggle debug info"),
-            ("F", "Toggle FOV overlay"),
-            ("?", "Toggle this help"),
-        ]
-
         # Render keybindings
-        y_offset = 80
-        line_height = 35
+        y_offset = title_height
 
         for key, description in keybindings:
             # Render key (highlighted)
@@ -724,18 +1074,195 @@ def render_keybindings_overlay(surface: pygame.Surface) -> None:
 
             # Render description
             desc_surface = desc_font.render(description, True, (220, 220, 220))
-            panel.blit(desc_surface, (120, y_offset + 2))
+            panel.blit(desc_surface, (140, y_offset + 2))
 
             y_offset += line_height
 
         # Footer
-        y_offset += 20
+        y_offset += 15
         footer_font = pygame.font.Font(None, 20)
         footer = footer_font.render("Press '?' again to close", True, (150, 150, 150))
         footer_rect = footer.get_rect(centerx=panel_width // 2, y=y_offset)
         panel.blit(footer, footer_rect)
 
         # Blit panel to screen (centered)
+        surface.blit(panel, (panel_x, panel_y))
+
+    except pygame.error:
+        # Font not initialized, skip rendering
+        pass
+
+
+ACTION_NAMES = {
+    0: "Hold",
+    1: "N", 2: "W", 3: "E", 4: "S",
+    5: "NE", 6: "NW", 7: "SW", 8: "SE",
+    9: "D9", 10: "D10", 11: "D11", 12: "D12",
+    13: "Aggr", 14: "Def", 15: "Think",
+}
+
+
+def render_unit_rewards_overlay(
+    surface: pygame.Surface,
+    reward_info: Dict[str, Any]
+) -> None:
+    """
+    Render unit rewards overlay showing all units from both teams.
+
+    Displays episode rewards and current actions for all blue and red units.
+
+    Args:
+        surface: Pygame surface to draw on
+        reward_info: Dictionary containing:
+            - 'selected_unit_id': Currently selected blue unit index (or None)
+            - 'selected_red_unit_id': Currently selected red unit index (or None)
+            - 'blue_units': List of blue Unit objects
+            - 'red_units': List of red Unit objects
+            - 'episode_rewards': Dict[(team, unit_id), float] cumulative rewards
+            - 'unit_actions': Dict[(team, unit_id), int] current actions
+    """
+    try:
+        selected_unit_id = reward_info.get('selected_unit_id')
+        selected_red_unit_id = reward_info.get('selected_red_unit_id')
+        blue_units = reward_info.get('blue_units', [])
+        red_units = reward_info.get('red_units', [])
+        episode_rewards = reward_info.get('episode_rewards', {})
+        unit_actions = reward_info.get('unit_actions', {})
+
+        # Create semi-transparent background panel (right side)
+        panel_width = 200
+        panel_height = 450
+        panel_x = WINDOW_SIZE - panel_width - 10
+        panel_y = 10
+
+        panel = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
+        panel.fill((0, 0, 0, 180))  # Dark semi-transparent background
+
+        # Draw border
+        pygame.draw.rect(panel, (255, 255, 100), (0, 0, panel_width, panel_height), 2)
+
+        # Initialize fonts
+        title_font = pygame.font.Font(None, 24)
+        label_font = pygame.font.Font(None, 20)
+        value_font = pygame.font.Font(None, 18)
+
+        y_offset = 8
+
+        # Title
+        title = title_font.render("UNIT REWARDS (R)", True, (255, 255, 100))
+        panel.blit(title, (10, y_offset))
+        y_offset += 24
+
+        # Blue team header
+        blue_header = label_font.render("BLUE TEAM", True, (135, 206, 250))
+        panel.blit(blue_header, (10, y_offset))
+        y_offset += 18
+
+        # Blue units - use tuple key format ("blue", unit_id)
+        blue_team_total = 0.0
+        for unit_idx, unit in enumerate(blue_units):
+            # Get reward using tuple key
+            unit_reward = episode_rewards.get(("blue", unit.id), 0.0)
+            blue_team_total += unit_reward
+
+            # Get current action - use unit_idx as fallback key since unit.id may differ
+            action_idx = unit_actions.get(("blue", unit.id), -1)
+            if action_idx == -1:
+                # Try with unit_idx in case IDs don't match
+                action_idx = unit_actions.get(("blue", unit_idx), -1)
+            action_name = ACTION_NAMES.get(action_idx, f"#{action_idx}")
+
+            # Get goal cell reference (D{row}{col})
+            goal = getattr(unit, 'goal_waypoint', None)
+            if goal is not None:
+                goal_col = int(goal[0] / TACTICAL_CELLS_PER_OPERATIONAL)
+                goal_row = int(goal[1] / TACTICAL_CELLS_PER_OPERATIONAL)
+                goal_cell = f"D{goal_row}{goal_col}"
+            else:
+                goal_cell = "-"
+
+            # Highlight selected unit
+            if unit_idx == selected_unit_id:
+                unit_color = (135, 206, 250)  # Light blue for selected
+                marker = ">"
+            else:
+                unit_color = (150, 150, 200)
+                marker = " "
+
+            prefix = "+" if unit_reward > 0 else ""
+            unit_text = value_font.render(
+                f"{marker}U{unit_idx + 1}: {prefix}{unit_reward:.1f} [{action_name} {goal_cell}]",
+                True, unit_color
+            )
+            panel.blit(unit_text, (10, y_offset))
+            y_offset += 15
+
+        # Blue team total
+        blue_total_color = (100, 255, 100) if blue_team_total > 0 else (255, 100, 100) if blue_team_total < 0 else (150, 150, 150)
+        blue_prefix = "+" if blue_team_total > 0 else ""
+        blue_total_text = label_font.render(f"Total: {blue_prefix}{blue_team_total:.1f}", True, blue_total_color)
+        panel.blit(blue_total_text, (10, y_offset))
+        y_offset += 24
+
+        # Red team header
+        red_header = label_font.render("RED TEAM", True, (255, 165, 0))
+        panel.blit(red_header, (10, y_offset))
+        y_offset += 18
+
+        # Red units - use tuple key format ("red", unit_id)
+        red_team_total = 0.0
+        for unit_idx, unit in enumerate(red_units):
+            # Get reward using tuple key
+            unit_reward = episode_rewards.get(("red", unit.id), 0.0)
+            red_team_total += unit_reward
+
+            # Get current action - use unit_idx as fallback key since unit.id may differ
+            action_idx = unit_actions.get(("red", unit.id), -1)
+            if action_idx == -1:
+                # Try with unit_idx in case IDs don't match
+                action_idx = unit_actions.get(("red", unit_idx), -1)
+            action_name = ACTION_NAMES.get(action_idx, f"#{action_idx}")
+
+            # Get goal cell reference (D{row}{col})
+            goal = getattr(unit, 'goal_waypoint', None)
+            if goal is not None:
+                goal_col = int(goal[0] / TACTICAL_CELLS_PER_OPERATIONAL)
+                goal_row = int(goal[1] / TACTICAL_CELLS_PER_OPERATIONAL)
+                goal_cell = f"D{goal_row}{goal_col}"
+            else:
+                goal_cell = "-"
+
+            # Highlight selected unit
+            if unit_idx == selected_red_unit_id:
+                unit_color = (255, 165, 0)  # Orange for selected
+                marker = ">"
+            else:
+                unit_color = (200, 150, 150)
+                marker = " "
+
+            prefix = "+" if unit_reward > 0 else ""
+            unit_text = value_font.render(
+                f"{marker}u{unit_idx + 1}: {prefix}{unit_reward:.1f} [{action_name} {goal_cell}]",
+                True, unit_color
+            )
+            panel.blit(unit_text, (10, y_offset))
+            y_offset += 15
+
+        # Red team total
+        red_total_color = (100, 255, 100) if red_team_total > 0 else (255, 100, 100) if red_team_total < 0 else (150, 150, 150)
+        red_prefix = "+" if red_team_total > 0 else ""
+        red_total_text = label_font.render(f"Total: {red_prefix}{red_team_total:.1f}", True, red_total_color)
+        panel.blit(red_total_text, (10, y_offset))
+        y_offset += 24
+
+        # Keybindings hint
+        hint1 = value_font.render("1-8: Select blue", True, (120, 120, 120))
+        panel.blit(hint1, (10, y_offset))
+        y_offset += 14
+        hint2 = value_font.render("Shift+1-8: Select red", True, (120, 120, 120))
+        panel.blit(hint2, (10, y_offset))
+
+        # Blit panel to screen
         surface.blit(panel, (panel_x, panel_y))
 
     except pygame.error:

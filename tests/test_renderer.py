@@ -111,9 +111,9 @@ class TestColorFormats:
 
     def test_terrain_colors(self):
         """Test terrain color formats."""
-        from combatenv.config import COLOR_BUILDING, COLOR_FIRE, COLOR_SWAMP, COLOR_WATER
+        from combatenv.config import COLOR_OBSTACLE, COLOR_FIRE, COLOR_FOREST, COLOR_WATER
 
-        for color in [COLOR_BUILDING, COLOR_FIRE, COLOR_SWAMP, COLOR_WATER]:
+        for color in [COLOR_OBSTACLE, COLOR_FIRE, COLOR_FOREST, COLOR_WATER]:
             assert len(color) == 3
             assert all(0 <= c <= 255 for c in color)
 
@@ -181,7 +181,7 @@ class TestRendererFunctions:
 
         surface = pygame.Surface((WINDOW_SIZE, WINDOW_SIZE))
         terrain = TerrainGrid(GRID_SIZE, GRID_SIZE)
-        terrain.set(5, 5, TerrainType.BUILDING)
+        terrain.set(5, 5, TerrainType.OBSTACLE)
         terrain.set(10, 10, TerrainType.FIRE)
 
         render_terrain(surface, terrain)  # Should not raise

@@ -10,7 +10,7 @@ Controls:
         Right click/drag: Erase (paint Empty)
 
     Keyboard:
-        1-5: Select terrain type (1=Empty, 2=Building, 3=Fire, 4=Swamp, 5=Water)
+        1-5: Select terrain type (1=Empty, 2=Obstacle, 3=Fire, 4=Forest, 5=Water)
         S: Save map
         L: Load map
         C: Clear map
@@ -34,7 +34,7 @@ import subprocess
 import platform
 
 
-def _native_save_dialog(default_name: str = "map.json") -> str:
+def _native_save_dialog(default_name: str = "map.npz") -> str:
     """Show native save dialog using platform-specific methods."""
     system = platform.system()
 
@@ -57,8 +57,8 @@ def _native_save_dialog(default_name: str = "map.json") -> str:
     elif system == "Linux":
         # Linux: try zenity, then kdialog
         for cmd in [
-            ['zenity', '--file-selection', '--save', '--filename', default_name, '--file-filter', '*.json'],
-            ['kdialog', '--getsavefilename', '.', '*.json']
+            ['zenity', '--file-selection', '--save', '--filename', default_name, '--file-filter', '*.npz'],
+            ['kdialog', '--getsavefilename', '.', '*.npz']
         ]:
             try:
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
@@ -74,8 +74,8 @@ def _native_save_dialog(default_name: str = "map.json") -> str:
         script = '''
         Add-Type -AssemblyName System.Windows.Forms
         $dialog = New-Object System.Windows.Forms.SaveFileDialog
-        $dialog.Filter = "JSON files (*.json)|*.json|All files (*.*)|*.*"
-        $dialog.FileName = "map.json"
+        $dialog.Filter = "Map files (*.npz)|*.npz|All files (*.*)|*.*"
+        $dialog.FileName = "map.npz"
         if ($dialog.ShowDialog() -eq 'OK') { $dialog.FileName }
         '''
         try:
@@ -98,7 +98,7 @@ def _native_open_dialog() -> str:
     if system == "Darwin":
         # macOS: use osascript
         script = '''
-        set theFile to choose file with prompt "Load Map" of type {"json", "public.json"}
+        set theFile to choose file with prompt "Load Map"
         return POSIX path of theFile
         '''
         try:
@@ -114,8 +114,8 @@ def _native_open_dialog() -> str:
     elif system == "Linux":
         # Linux: try zenity, then kdialog
         for cmd in [
-            ['zenity', '--file-selection', '--file-filter', '*.json'],
-            ['kdialog', '--getopenfilename', '.', '*.json']
+            ['zenity', '--file-selection', '--file-filter', '*.npz *.json'],
+            ['kdialog', '--getopenfilename', '.', '*.npz *.json']
         ]:
             try:
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
@@ -131,7 +131,7 @@ def _native_open_dialog() -> str:
         script = '''
         Add-Type -AssemblyName System.Windows.Forms
         $dialog = New-Object System.Windows.Forms.OpenFileDialog
-        $dialog.Filter = "JSON files (*.json)|*.json|All files (*.*)|*.*"
+        $dialog.Filter = "Map files (*.npz;*.json)|*.npz;*.json|All files (*.*)|*.*"
         if ($dialog.ShowDialog() -eq 'OK') { $dialog.FileName }
         '''
         try:
@@ -149,7 +149,7 @@ def _native_open_dialog() -> str:
 from combatenv import TerrainGrid, TerrainType, save_map, load_map
 from combatenv.config import (
     GRID_SIZE, CELL_SIZE, WINDOW_SIZE,
-    COLOR_BUILDING, COLOR_FIRE, COLOR_SWAMP, COLOR_WATER
+    COLOR_OBSTACLE, COLOR_FIRE, COLOR_FOREST, COLOR_WATER
 )
 
 
@@ -171,17 +171,17 @@ COLOR_BUTTON_HOVER = (100, 100, 100)
 # Terrain palette
 TERRAIN_COLORS = {
     TerrainType.EMPTY: COLOR_EMPTY,
-    TerrainType.BUILDING: COLOR_BUILDING,
+    TerrainType.OBSTACLE: COLOR_OBSTACLE,
     TerrainType.FIRE: COLOR_FIRE,
-    TerrainType.SWAMP: COLOR_SWAMP,
+    TerrainType.FOREST: COLOR_FOREST,
     TerrainType.WATER: COLOR_WATER,
 }
 
 TERRAIN_NAMES = {
     TerrainType.EMPTY: "Empty",
-    TerrainType.BUILDING: "Building",
+    TerrainType.OBSTACLE: "Obstacle",
     TerrainType.FIRE: "Fire",
-    TerrainType.SWAMP: "Swamp",
+    TerrainType.FOREST: "Forest",
     TerrainType.WATER: "Water",
 }
 
@@ -197,7 +197,7 @@ class MapEditor:
         self.clock = pygame.time.Clock()
 
         self.terrain_grid = TerrainGrid(GRID_SIZE, GRID_SIZE)
-        self.selected_terrain = TerrainType.BUILDING
+        self.selected_terrain = TerrainType.OBSTACLE
         self.show_grid = True
         self.running = True
 
@@ -285,11 +285,11 @@ class MapEditor:
         elif event.key == pygame.K_1:
             self.selected_terrain = TerrainType.EMPTY
         elif event.key == pygame.K_2:
-            self.selected_terrain = TerrainType.BUILDING
+            self.selected_terrain = TerrainType.OBSTACLE
         elif event.key == pygame.K_3:
             self.selected_terrain = TerrainType.FIRE
         elif event.key == pygame.K_4:
-            self.selected_terrain = TerrainType.SWAMP
+            self.selected_terrain = TerrainType.FOREST
         elif event.key == pygame.K_5:
             self.selected_terrain = TerrainType.WATER
 
@@ -340,8 +340,8 @@ class MapEditor:
         """Save the current map to a file."""
         if HAS_TKINTER:
             filepath = filedialog.asksaveasfilename(
-                defaultextension=".json",
-                filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+                defaultextension=".npz",
+                filetypes=[("Map files", "*.npz"), ("All files", "*.*")],
                 title="Save Map"
             )
         else:
@@ -350,12 +350,12 @@ class MapEditor:
 
         # Fallback to default if dialog was cancelled or unavailable
         if not filepath:
-            filepath = "map.json"
+            filepath = "map.npz"
             print(f"Using default filename: {filepath}")
 
-        # Ensure .json extension
-        if not filepath.endswith('.json'):
-            filepath += '.json'
+        # Ensure .npz extension
+        if not filepath.endswith('.npz'):
+            filepath += '.npz'
         save_map(self.terrain_grid, filepath)
         print(f"Map saved to: {filepath}")
 
@@ -363,7 +363,7 @@ class MapEditor:
         """Load a map from a file."""
         if HAS_TKINTER:
             filepath = filedialog.askopenfilename(
-                filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+                filetypes=[("Map files", "*.npz *.json"), ("All files", "*.*")],
                 title="Load Map"
             )
         else:

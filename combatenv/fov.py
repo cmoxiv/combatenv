@@ -51,7 +51,8 @@ Example:
 import math
 from typing import Tuple, Set, TYPE_CHECKING, Protocol, List
 
-from .config import LOS, FOV_ANGLE, GRID_SIZE
+from .config import LOS, FOV_ANGLE, GRID_SIZE, FOREST_DETECTION_MULTIPLIER, WATER_DETECTION_MULTIPLIER
+from .terrain import TerrainType
 
 if TYPE_CHECKING:
     from .agent import Agent
@@ -402,13 +403,25 @@ def is_agent_visible_to_agent(
     Returns:
         True if target is within observer's FOV and not blocked by buildings
     """
+    effective_range = max_range
+
+    # Reduce detection range for targets in terrain that provides concealment
+    if terrain_grid is not None:
+        target_cell_x = int(target.position[0])
+        target_cell_y = int(target.position[1])
+        target_terrain = terrain_grid.get(target_cell_x, target_cell_y)
+        if target_terrain == TerrainType.FOREST:
+            effective_range *= FOREST_DETECTION_MULTIPLIER
+        elif target_terrain == TerrainType.WATER:
+            effective_range *= WATER_DETECTION_MULTIPLIER  # 0 = fully invisible
+
     # First check if target is in FOV cone
     if not is_point_in_fov_cone(
         observer.position,
         observer.orientation,
         target.position,
         fov_angle,
-        max_range
+        effective_range
     ):
         return False
 
@@ -640,7 +653,7 @@ if __name__ == "__main__":
         from .terrain import TerrainGrid, TerrainType
 
         terrain = TerrainGrid(20, 20)
-        terrain.set(6, 5, TerrainType.BUILDING)  # Place building in front
+        terrain.set(6, 5, TerrainType.OBSTACLE)  # Place building in front
 
         agent_pos = (5.0, 5.0)
         cells = get_fov_cells(agent_pos, 0.0, 90, 5, terrain_grid=terrain)

@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "combatenv"
+version = "0.1.1"
+description = "A Gymnasium-compatible multi-agent grid-world environment for combat simulation"
+requires-python = ">=3.10"
+dependencies = [
+    "gymnasium",
+    "noise",
+    "numpy",
+    "pygame",
+]
+
+[tool.setuptools.packages.find]
+include = ["combatenv*"]

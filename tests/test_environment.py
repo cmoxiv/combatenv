@@ -49,9 +49,9 @@ class TestEnvInit:
     """Tests for environment initialization."""
 
     def test_action_space_shape(self):
-        """Test action space has correct shape."""
+        """Test action space has correct shape (4D: move_x, move_y, shoot, think)."""
         env = TacticalCombatEnv(render_mode=None)
-        assert env.action_space.shape == (3,)
+        assert env.action_space.shape == (4,)
 
     def test_observation_space_shape(self):
         """Test observation space has correct shape."""
@@ -88,12 +88,24 @@ class TestEnvReset:
         assert 'red_kills' in info
 
     def test_spawns_agents(self):
-        """Test reset spawns correct number of agents."""
-        env = TacticalCombatEnv(render_mode=None)
+        """Test reset spawns correct number of agents (without units)."""
+        env = TacticalCombatEnv(render_mode=None, config=EnvConfig(use_units=False))
         env.reset(seed=42)
 
         assert len(env.blue_agents) == NUM_AGENTS_PER_TEAM
         assert len(env.red_agents) == NUM_AGENTS_PER_TEAM
+
+    def test_spawns_units(self):
+        """Test reset spawns correct number of agents with unit system."""
+        from combatenv.config import NUM_UNITS_PER_TEAM, AGENTS_PER_UNIT
+        env = TacticalCombatEnv(render_mode=None, config=EnvConfig(use_units=True))
+        env.reset(seed=42)
+
+        expected_per_team = NUM_UNITS_PER_TEAM * AGENTS_PER_UNIT
+        assert len(env.blue_agents) == expected_per_team
+        assert len(env.red_agents) == expected_per_team
+        assert len(env.blue_units) == NUM_UNITS_PER_TEAM
+        assert len(env.red_units) == NUM_UNITS_PER_TEAM
 
     def test_generates_terrain(self):
         """Test reset generates terrain."""
@@ -245,17 +257,26 @@ class TestEnvTermination:
 class TestTerrainEffects:
     """Tests for terrain effects on agents."""
 
+    @staticmethod
+    def _fill_block(terrain_grid, x, y, terrain_type):
+        """Fill the entire terrain block containing (x, y) with terrain_type."""
+        from combatenv.config import TACTICAL_CELLS_PER_TERRAIN_BLOCK as BLK
+        bx = (x // BLK) * BLK
+        by = (y // BLK) * BLK
+        for dx in range(BLK):
+            for dy in range(BLK):
+                terrain_grid.set(bx + dx, by + dy, terrain_type)
+
     def test_fire_damage(self):
         """Test fire terrain damages agents."""
         env = TacticalCombatEnv(render_mode=None)
         env.reset(seed=42)
 
-        # Place agent on fire
+        # Place agent's entire block on fire so block majority is FIRE
         agent = env.controlled_agent
         initial_health = agent.health
-
-        # Find or create fire cell
-        env.terrain_grid.set(int(agent.position[0]), int(agent.position[1]), TerrainType.FIRE)
+        cx, cy = int(agent.position[0]), int(agent.position[1])
+        self._fill_block(env.terrain_grid, cx, cy, TerrainType.FIRE)
 
         # Step to trigger terrain effect
         env.step(np.array([0.0, 0.0, 0.0]))
@@ -263,21 +284,22 @@ class TestTerrainEffects:
         # Health should decrease (fire bypasses armor)
         assert agent.health < initial_health
 
-    def test_swamp_stuck(self):
-        """Test swamp terrain makes agents stuck."""
+    def test_forest_slows(self):
+        """Test forest terrain slows agents."""
         env = TacticalCombatEnv(render_mode=None)
         env.reset(seed=42)
 
         agent = env.controlled_agent
 
-        # Place agent on swamp
-        env.terrain_grid.set(int(agent.position[0]), int(agent.position[1]), TerrainType.SWAMP)
+        # Fill agent's block with forest so block majority is FOREST
+        cx, cy = int(agent.position[0]), int(agent.position[1])
+        self._fill_block(env.terrain_grid, cx, cy, TerrainType.FOREST)
 
         # Step to trigger terrain effect
         env.step(np.array([0.0, 0.0, 0.0]))
 
-        # Agent should be stuck
-        assert agent.is_stuck == True
+        # Agent should be tracked as in_forest
+        assert agent.in_forest == True
 
 
 if __name__ == "__main__":

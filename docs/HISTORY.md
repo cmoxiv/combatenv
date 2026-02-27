@@ -108,9 +108,9 @@ A Pygame-based grid-world simulation featuring multi-agent systems with field-of
 **Objective:** Add terrain types with unique effects
 
 **Completed:**
-- Created TerrainType enum (EMPTY, BUILDING, FIRE, SWAMP, WATER)
+- Created TerrainType enum (EMPTY, OBSTACLE, FIRE, FOREST, WATER)
 - Implemented TerrainGrid class
-- Added terrain effects (fire damage, swamp stuck)
+- Added terrain effects (fire damage, forest stuck)
 - Integrated terrain with LOS blocking
 
 ### Phase 7: Gymnasium Environment
@@ -152,7 +152,7 @@ A Pygame-based grid-world simulation featuring multi-agent systems with field-of
 - Real-time collision detection with spatial optimization
 - Two-layer field-of-view system
 - Projectile-based combat with accuracy modifiers
-- Terrain system (building, fire, swamp, water)
+- Terrain system (obstacle, fire, forest, water)
 - Resource management (stamina, armor, ammo)
 - Smooth 60 FPS performance
 
