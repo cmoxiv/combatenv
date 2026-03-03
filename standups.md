@@ -517,3 +517,70 @@ Status review session after a month-long break. All prior work (unit/squad syste
 
 ### Summary
 Implemented the full elevation mechanic for empty tiles across three files, giving Dijkstra/A* a richer cost landscape to exploit with visual feedback so students can see why informed search picks certain routes.
+
+## 2026-02-28 23:59
+
+**Branch:** main
+
+### Completed
+- Polished environment codebase (commit `c4721d5`)
+
+### In Progress
+- Working tree is clean — no uncommitted changes
+
+### Blockers
+- None
+
+### Next Steps
+- Run full test suite to validate current state after polishing
+- Review any remaining documentation updates needed
+- Continue with wrapper API documentation or RL training evaluation
+
+## Session Wrap-up 2026-03-02
+
+**Date:** 2026-03-02
+
+### What Got Done
+- Ported four pixel-level terrain color variation functions from `teaching/env.py` into `combatenv/renderer.py`
+  - `render_water_depth()` — distance-based depth gradient (darker blue for deeper water)
+  - `render_forest_depth()` — distance-based edge/interior gradient (bright green edges, dark green deep)
+  - `render_lava_variation()` — Perlin noise cool/hot zones on fire tiles
+  - `render_mountain_elevation()` — Perlin noise dark-rock/snow-cap zones on obstacles
+- Added 8 cache globals and dirty-flag invalidation tied to `render_terrain()` rebuild
+- Wired overlays into both `render_all()` and `RenderWrapper.render()` pipelines
+- Renamed `SearchAgent.step()` to `SearchAgent.learn(obs, action, new_obs, reward, info)` across all three teaching files
+  - Updated `sss_solution.py`, `sss_question.py`, and `env.py` main loop call sites
+  - SSS agents ignore obs/action/new_obs, only use reward and info
+- Full test suite: **298 passed**, 2 pre-existing failures, 0 new failures
+
+### Summary
+Two-part session: ported pixel-level terrain rendering from the teaching SSS visualiser into the main combatenv renderer for visually richer terrain, then refactored the SSS agent protocol from `step(reward, info)` to `learn(obs, action, new_obs, reward, info)` to establish a consistent agent interface that generalizes beyond state-space search.
+
+## 2026-03-03 00:00
+
+**Branch:** main
+
+### Completed
+- No commits in the last 24 hours
+
+### In Progress
+- **Projectile-terrain interactions** (`combatenv/projectile.py`):
+  - Forest terrain drains projectile lifetime at 2x speed (halves effective range)
+  - Projectiles pass over agents standing in water (no collision)
+- **Terrain rendering overlays** (`combatenv/renderer.py`, +325 lines):
+  - `render_water_depth()` — distance-based depth gradient (darker blue for deeper water)
+  - `render_forest_depth()` — distance-based edge/interior gradient
+  - `render_lava_variation()` — Perlin noise cool/hot zones on fire tiles
+  - `render_mountain_elevation()` — Perlin noise dark-rock/snow-cap zones on obstacles
+  - 8 cache globals with dirty-flag invalidation
+- **Render pipeline integration** (`combatenv/wrappers/render_wrapper.py`): Wired 4 new terrain overlays into `RenderWrapper.render()`
+- **Projectile-terrain tests** (`tests/test_projectile.py`, +85 lines): 5 new tests covering water immunity, forest lifetime drain, and edge cases
+- **Teaching materials** (`teaching/`): Updated `env.py`, `sss_question.py`, `sss_solution.py`
+
+### Blockers
+- None
+
+### Next Steps
+- Run full test suite to validate new projectile-terrain interactions
+- Consider adding terrain interaction effects for other terrain types (swamp, etc.)
+- Commit terrain rendering and projectile interaction changes

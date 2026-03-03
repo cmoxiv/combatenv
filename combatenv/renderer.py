@@ -47,7 +47,12 @@ Example:
 import pygame
 import math
 import random
+from collections import deque
 from typing import Any, Dict, List, Optional, Set, Tuple
+
+import numpy as np
+
+from .terrain import TerrainType
 
 from .config import (
     WINDOW_SIZE,
@@ -87,6 +92,16 @@ _GRID_LINE_SURFACE = None
 
 # Cached terrain surface (rebuilt when terrain_grid._surface_dirty is True)
 _TERRAIN_SURFACE = None
+
+# Cached terrain variation overlay surfaces
+_WATER_DEPTH_SURFACE: Optional[pygame.Surface] = None
+_WATER_DEPTH_DIRTY = True
+_FOREST_DEPTH_SURFACE: Optional[pygame.Surface] = None
+_FOREST_DEPTH_DIRTY = True
+_LAVA_SURFACE: Optional[pygame.Surface] = None
+_LAVA_DIRTY = True
+_MOUNTAIN_SURFACE: Optional[pygame.Surface] = None
+_MOUNTAIN_DIRTY = True
 
 
 def _ensure_surfaces_initialized():
@@ -405,8 +420,8 @@ def render_terrain(surface: pygame.Surface, terrain_grid) -> None:
         surface: Pygame surface to draw on
         terrain_grid: TerrainGrid object containing pixel-level terrain data
     """
-    import numpy as np
     global _TERRAIN_SURFACE
+    global _WATER_DEPTH_DIRTY, _FOREST_DEPTH_DIRTY, _LAVA_DIRTY, _MOUNTAIN_DIRTY
 
     # Check if we need to rebuild the cached surface
     if _TERRAIN_SURFACE is None or terrain_grid._surface_dirty:
@@ -431,7 +446,309 @@ def render_terrain(surface: pygame.Surface, terrain_grid) -> None:
         pygame.surfarray.blit_array(_TERRAIN_SURFACE, rgb)
         terrain_grid._surface_dirty = False
 
+        # Invalidate all terrain variation overlays
+        _WATER_DEPTH_DIRTY = True
+        _FOREST_DEPTH_DIRTY = True
+        _LAVA_DIRTY = True
+        _MOUNTAIN_DIRTY = True
+
     surface.blit(_TERRAIN_SURFACE, (0, 0))
+
+
+def render_water_depth(surface: pygame.Surface, terrain_grid) -> None:
+    """Overlay deep water pixels with darker blue based on distance from shore."""
+    global _WATER_DEPTH_SURFACE, _WATER_DEPTH_DIRTY
+
+    if _WATER_DEPTH_SURFACE is not None and not _WATER_DEPTH_DIRTY:
+        surface.blit(_WATER_DEPTH_SURFACE, (0, 0))
+        return
+
+    pw = terrain_grid.pixel_width
+    ph = terrain_grid.pixel_height
+
+    water_full = terrain_grid.grid == TerrainType.WATER
+
+    if not water_full.any():
+        _WATER_DEPTH_SURFACE = pygame.Surface((pw, ph), pygame.SRCALPHA)
+        _WATER_DEPTH_DIRTY = False
+        return
+
+    try:
+        from scipy.ndimage import distance_transform_edt
+        dist_full = distance_transform_edt(water_full).astype(np.float32)
+    except ImportError:
+        scale = 4
+        sz = pw // scale
+        water_small = water_full[::scale, ::scale]
+        dist_small = np.full((sz, sz), -1, dtype=np.int32)
+        q: deque = deque()
+        for x in range(sz):
+            for y in range(sz):
+                if not water_small[x, y]:
+                    continue
+                is_shore = False
+                for ddx, ddy in [(0, -1), (0, 1), (1, 0), (-1, 0)]:
+                    nx2, ny2 = x + ddx, y + ddy
+                    if nx2 < 0 or nx2 >= sz or ny2 < 0 or ny2 >= sz:
+                        is_shore = True
+                        break
+                    if not water_small[nx2, ny2]:
+                        is_shore = True
+                        break
+                if is_shore:
+                    dist_small[x, y] = 0
+                    q.append((x, y))
+        while q:
+            cx, cy = q.popleft()
+            for ddx, ddy in [(0, -1), (0, 1), (1, 0), (-1, 0)]:
+                nx2, ny2 = cx + ddx, cy + ddy
+                if 0 <= nx2 < sz and 0 <= ny2 < sz and water_small[nx2, ny2] and dist_small[nx2, ny2] < 0:
+                    dist_small[nx2, ny2] = dist_small[cx, cy] + 1
+                    q.append((nx2, ny2))
+        dist_full = np.kron(dist_small.astype(np.float32), np.ones((scale, scale), dtype=np.float32))
+
+    max_dist = float(dist_full.max())
+    if max_dist < 1.0:
+        max_dist = 1.0
+
+    _WATER_DEPTH_SURFACE = pygame.Surface((pw, ph), pygame.SRCALPHA)
+    arr = pygame.surfarray.pixels3d(_WATER_DEPTH_SURFACE)
+    alpha_arr = pygame.surfarray.pixels_alpha(_WATER_DEPTH_SURFACE)
+
+    depth_mask = dist_full > 0
+    alpha_values = (dist_full / max_dist * 100).clip(0, 255).astype(np.uint8)
+
+    arr[depth_mask, 0] = 0
+    arr[depth_mask, 1] = 0
+    arr[depth_mask, 2] = 60
+    alpha_arr[depth_mask] = alpha_values[depth_mask]
+
+    del arr, alpha_arr
+
+    _WATER_DEPTH_DIRTY = False
+    surface.blit(_WATER_DEPTH_SURFACE, (0, 0))
+
+
+def render_forest_depth(surface: pygame.Surface, terrain_grid) -> None:
+    """Overlay deep forest pixels with darker green based on distance from edge."""
+    global _FOREST_DEPTH_SURFACE, _FOREST_DEPTH_DIRTY
+
+    if _FOREST_DEPTH_SURFACE is not None and not _FOREST_DEPTH_DIRTY:
+        surface.blit(_FOREST_DEPTH_SURFACE, (0, 0))
+        return
+
+    pw = terrain_grid.pixel_width
+    ph = terrain_grid.pixel_height
+
+    forest_full = terrain_grid.grid == TerrainType.FOREST
+
+    if not forest_full.any():
+        _FOREST_DEPTH_SURFACE = pygame.Surface((pw, ph), pygame.SRCALPHA)
+        _FOREST_DEPTH_DIRTY = False
+        return
+
+    try:
+        from scipy.ndimage import distance_transform_edt
+        dist_full = distance_transform_edt(forest_full).astype(np.float32)
+    except ImportError:
+        scale = 4
+        sz = pw // scale
+        forest_small = forest_full[::scale, ::scale]
+        dist_small = np.full((sz, sz), -1, dtype=np.int32)
+        q: deque = deque()
+        for x in range(sz):
+            for y in range(sz):
+                if not forest_small[x, y]:
+                    continue
+                is_edge = False
+                for ddx, ddy in [(0, -1), (0, 1), (1, 0), (-1, 0)]:
+                    nx2, ny2 = x + ddx, y + ddy
+                    if nx2 < 0 or nx2 >= sz or ny2 < 0 or ny2 >= sz:
+                        is_edge = True
+                        break
+                    if not forest_small[nx2, ny2]:
+                        is_edge = True
+                        break
+                if is_edge:
+                    dist_small[x, y] = 0
+                    q.append((x, y))
+        while q:
+            cx, cy = q.popleft()
+            for ddx, ddy in [(0, -1), (0, 1), (1, 0), (-1, 0)]:
+                nx2, ny2 = cx + ddx, cy + ddy
+                if 0 <= nx2 < sz and 0 <= ny2 < sz and forest_small[nx2, ny2] and dist_small[nx2, ny2] < 0:
+                    dist_small[nx2, ny2] = dist_small[cx, cy] + 1
+                    q.append((nx2, ny2))
+        dist_full = np.kron(dist_small.astype(np.float32), np.ones((scale, scale), dtype=np.float32))
+
+    max_dist = float(dist_full.max())
+    if max_dist < 1.0:
+        max_dist = 1.0
+
+    _FOREST_DEPTH_SURFACE = pygame.Surface((pw, ph), pygame.SRCALPHA)
+    arr = pygame.surfarray.pixels3d(_FOREST_DEPTH_SURFACE)
+    alpha_arr = pygame.surfarray.pixels_alpha(_FOREST_DEPTH_SURFACE)
+
+    forest_mask = dist_full > 0
+    t = np.zeros_like(dist_full)
+    t[forest_mask] = (dist_full[forest_mask] / max_dist).clip(0.0, 1.0)
+
+    tm = t[forest_mask]
+    arr[forest_mask, 0] = (50.0 * (1.0 - tm)).astype(np.uint8)
+    arr[forest_mask, 1] = (200.0 - 170.0 * tm).astype(np.uint8)
+    arr[forest_mask, 2] = (50.0 * (1.0 - tm)).astype(np.uint8)
+    alpha_arr[forest_mask] = (70.0 + 50.0 * tm).astype(np.uint8)
+
+    del arr, alpha_arr
+
+    _FOREST_DEPTH_DIRTY = False
+    surface.blit(_FOREST_DEPTH_SURFACE, (0, 0))
+
+
+def render_lava_variation(surface: pygame.Surface, terrain_grid) -> None:
+    """Pixel-level color variation on fire tiles using Perlin noise (cached)."""
+    global _LAVA_SURFACE, _LAVA_DIRTY
+
+    if _LAVA_SURFACE is not None and not _LAVA_DIRTY:
+        surface.blit(_LAVA_SURFACE, (0, 0))
+        return
+
+    pw = terrain_grid.pixel_width
+    ph = terrain_grid.pixel_height
+
+    fire_full = terrain_grid.grid == TerrainType.FIRE
+
+    if not fire_full.any():
+        _LAVA_SURFACE = pygame.Surface((pw, ph), pygame.SRCALPHA)
+        _LAVA_DIRTY = False
+        return
+
+    from .terrain import TerrainGrid as _TG
+
+    gen_size = pw // 4
+    try:
+        noise_field = _TG._sample_noise(
+            gen_size, seed=random.randint(0, 65535),
+            scale=18.0, octaves=4, persistence=0.6, lacunarity=2.0,
+        )
+    except ImportError:
+        noise_field = np.random.default_rng().uniform(-0.5, 0.5, (gen_size, gen_size)).astype(np.float32)
+    noise_full = np.kron(noise_field, np.ones((4, 4), dtype=np.float32))
+
+    nmin, nmax = float(noise_full.min()), float(noise_full.max())
+    if nmax - nmin < 1e-6:
+        nmax = nmin + 1.0
+    t = ((noise_full - nmin) / (nmax - nmin)).clip(0.0, 1.0)
+
+    _LAVA_SURFACE = pygame.Surface((pw, ph), pygame.SRCALPHA)
+    arr = pygame.surfarray.pixels3d(_LAVA_SURFACE)
+    alpha_arr = pygame.surfarray.pixels_alpha(_LAVA_SURFACE)
+
+    fm = fire_full
+    tv = t[fm]
+
+    cool = tv < 0.4
+    hot = tv > 0.6
+
+    r = np.zeros(tv.shape, dtype=np.uint8)
+    g = np.zeros(tv.shape, dtype=np.uint8)
+    b = np.zeros(tv.shape, dtype=np.uint8)
+    a = np.zeros(tv.shape, dtype=np.uint8)
+
+    cool_t = ((0.4 - tv[cool]) / 0.4).clip(0.0, 1.0)
+    r[cool] = (100 * cool_t).astype(np.uint8)
+    g[cool] = (10 * cool_t).astype(np.uint8)
+    b[cool] = 0
+    a[cool] = (140 * cool_t).astype(np.uint8)
+
+    hot_t = ((tv[hot] - 0.6) / 0.4).clip(0.0, 1.0)
+    r[hot] = (255 * np.ones_like(hot_t)).astype(np.uint8)
+    g[hot] = (200 + 55 * hot_t).astype(np.uint8)
+    b[hot] = (40 + 120 * hot_t).astype(np.uint8)
+    a[hot] = (100 * hot_t).astype(np.uint8)
+
+    arr[fm, 0] = r
+    arr[fm, 1] = g
+    arr[fm, 2] = b
+    alpha_arr[fm] = a
+
+    del arr, alpha_arr
+
+    _LAVA_DIRTY = False
+    surface.blit(_LAVA_SURFACE, (0, 0))
+
+
+def render_mountain_elevation(surface: pygame.Surface, terrain_grid) -> None:
+    """Pixel-level elevation variation on obstacle tiles using Perlin noise (cached)."""
+    global _MOUNTAIN_SURFACE, _MOUNTAIN_DIRTY
+
+    if _MOUNTAIN_SURFACE is not None and not _MOUNTAIN_DIRTY:
+        surface.blit(_MOUNTAIN_SURFACE, (0, 0))
+        return
+
+    pw = terrain_grid.pixel_width
+    ph = terrain_grid.pixel_height
+
+    obs_full = terrain_grid.grid == TerrainType.OBSTACLE
+
+    if not obs_full.any():
+        _MOUNTAIN_SURFACE = pygame.Surface((pw, ph), pygame.SRCALPHA)
+        _MOUNTAIN_DIRTY = False
+        return
+
+    from .terrain import TerrainGrid as _TG
+
+    gen_size = pw // 4
+    try:
+        noise_field = _TG._sample_noise(
+            gen_size, seed=random.randint(0, 65535),
+            scale=22.0, octaves=4, persistence=0.55, lacunarity=2.0,
+        )
+    except ImportError:
+        noise_field = np.random.default_rng().uniform(-0.5, 0.5, (gen_size, gen_size)).astype(np.float32)
+    noise_full = np.kron(noise_field, np.ones((4, 4), dtype=np.float32))
+
+    nmin, nmax = float(noise_full.min()), float(noise_full.max())
+    if nmax - nmin < 1e-6:
+        nmax = nmin + 1.0
+    t = ((noise_full - nmin) / (nmax - nmin)).clip(0.0, 1.0)
+
+    _MOUNTAIN_SURFACE = pygame.Surface((pw, ph), pygame.SRCALPHA)
+    arr = pygame.surfarray.pixels3d(_MOUNTAIN_SURFACE)
+    alpha_arr = pygame.surfarray.pixels_alpha(_MOUNTAIN_SURFACE)
+
+    om = obs_full
+    tv = t[om]
+
+    low = tv < 0.35
+    high = tv > 0.6
+
+    r = np.zeros(tv.shape, dtype=np.uint8)
+    g = np.zeros(tv.shape, dtype=np.uint8)
+    b = np.zeros(tv.shape, dtype=np.uint8)
+    a = np.zeros(tv.shape, dtype=np.uint8)
+
+    low_t = ((0.35 - tv[low]) / 0.35).clip(0.0, 1.0)
+    r[low] = (20 * low_t).astype(np.uint8)
+    g[low] = (18 * low_t).astype(np.uint8)
+    b[low] = (25 * low_t).astype(np.uint8)
+    a[low] = (120 * low_t).astype(np.uint8)
+
+    high_t = ((tv[high] - 0.6) / 0.4).clip(0.0, 1.0)
+    r[high] = (200 + 30 * high_t).astype(np.uint8)
+    g[high] = (205 + 30 * high_t).astype(np.uint8)
+    b[high] = (215 + 30 * high_t).astype(np.uint8)
+    a[high] = (130 * high_t).astype(np.uint8)
+
+    arr[om, 0] = r
+    arr[om, 1] = g
+    arr[om, 2] = b
+    alpha_arr[om] = a
+
+    del arr, alpha_arr
+
+    _MOUNTAIN_DIRTY = False
+    surface.blit(_MOUNTAIN_SURFACE, (0, 0))
 
 
 def render_fov_highlights(
@@ -767,9 +1084,13 @@ def render_all(
     # Layer 1: Background
     render_background(surface)
 
-    # Layer 2: Terrain (buildings, fire, forest)
+    # Layer 2: Terrain (buildings, fire, forest) + pixel-level overlays
     if terrain_grid:
         render_terrain(surface, terrain_grid)
+        render_water_depth(surface, terrain_grid)
+        render_forest_depth(surface, terrain_grid)
+        render_lava_variation(surface, terrain_grid)
+        render_mountain_elevation(surface, terrain_grid)
 
     # Layer 3: Grid lines
     render_grid_lines(surface)

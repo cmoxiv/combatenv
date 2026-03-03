@@ -113,8 +113,12 @@ class Projectile:
         if terrain_grid is not None:
             cell_x = int(new_x)
             cell_y = int(new_y)
-            if terrain_grid.get(cell_x, cell_y) == TerrainType.OBSTACLE:
+            terrain = terrain_grid.get(cell_x, cell_y)
+            if terrain == TerrainType.OBSTACLE:
                 return True
+            # Forest drains lifetime at 2x speed (halves effective range)
+            if terrain == TerrainType.FOREST:
+                self.lifetime_remaining -= dt
 
         return False
 
@@ -134,6 +138,10 @@ class Projectile:
 
         # Don't hit dead agents
         if not agent.is_alive:
+            return False
+
+        # Don't hit agents in water (projectiles pass over)
+        if agent.in_water:
             return False
 
         # Check friendly fire setting

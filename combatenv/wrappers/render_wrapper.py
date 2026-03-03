@@ -32,6 +32,10 @@ from ..renderer import (
     render_operational_grid,
     render_strategic_grid,
     render_terrain,
+    render_water_depth,
+    render_forest_depth,
+    render_lava_variation,
+    render_mountain_elevation,
     render_agent,
     render_projectile,
     render_fov_highlights,
@@ -164,9 +168,13 @@ class RenderWrapper(BaseWrapper):
         # Get terrain grid
         terrain_grid = getattr(self.env, 'terrain_grid', None)
 
-        # Render terrain
+        # Render terrain + pixel-level variation overlays
         if terrain_grid is not None:
             render_terrain(screen, terrain_grid)
+            render_water_depth(screen, terrain_grid)
+            render_forest_depth(screen, terrain_grid)
+            render_lava_variation(screen, terrain_grid)
+            render_mountain_elevation(screen, terrain_grid)
 
         # Render grid overlays (tactical -> operational -> strategic, light to dark)
         if self.show_strategic_grid:

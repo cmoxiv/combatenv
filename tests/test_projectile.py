@@ -15,6 +15,7 @@ import pytest
 import math
 import random
 from combatenv import Projectile, create_projectile, Agent, config
+from combatenv.terrain import TerrainType, TerrainGrid
 PROJECTILE_SPEED = config.PROJECTILE_SPEED
 PROJECTILE_DAMAGE = config.PROJECTILE_DAMAGE
 GRID_SIZE = config.GRID_SIZE
@@ -313,6 +314,90 @@ class TestProjectileDamage:
         )
 
         assert proj.damage == PROJECTILE_DAMAGE
+
+
+class TestProjectileTerrainInteractions:
+    """Tests for projectile-terrain interactions."""
+
+    def test_no_collision_with_agent_in_water(self):
+        """Projectile passes through agent standing in water."""
+        proj = Projectile(
+            position=(10.0, 10.0),
+            velocity=(10.0, 0.0),
+            owner_team="blue",
+            shooter_id=1
+        )
+
+        enemy = Agent(position=(10.2, 10.0), orientation=0.0, team="red")
+        enemy.in_water = True
+
+        assert proj.check_collision(enemy) == False
+
+    def test_collision_with_agent_not_in_water(self):
+        """Projectile still hits agent not in water (sanity check)."""
+        proj = Projectile(
+            position=(10.0, 10.0),
+            velocity=(10.0, 0.0),
+            owner_team="blue",
+            shooter_id=1
+        )
+
+        enemy = Agent(position=(10.2, 10.0), orientation=0.0, team="red")
+        enemy.in_water = False
+
+        assert proj.check_collision(enemy) == True
+
+    def test_forest_drains_lifetime_2x(self):
+        """Projectile lifetime drains at 2x speed in forest terrain."""
+        terrain_grid = TerrainGrid(GRID_SIZE, GRID_SIZE)
+        terrain_grid.set(10, 10, TerrainType.FOREST)
+
+        proj = Projectile(
+            position=(9.5, 10.5),
+            velocity=(10.0, 0.0),
+            owner_team="blue",
+            shooter_id=1,
+            lifetime_remaining=2.0
+        )
+
+        dt = 0.1
+        proj.update(dt, terrain_grid)
+
+        # Normal drain is dt=0.1, forest adds another dt=0.1 -> total 0.2
+        assert abs(proj.lifetime_remaining - 1.8) < 0.01
+
+    def test_no_extra_drain_outside_forest(self):
+        """Projectile lifetime drains normally outside forest."""
+        terrain_grid = TerrainGrid(GRID_SIZE, GRID_SIZE)
+        # Default terrain is GROUND, no forest
+
+        proj = Projectile(
+            position=(10.0, 10.0),
+            velocity=(10.0, 0.0),
+            owner_team="blue",
+            shooter_id=1,
+            lifetime_remaining=2.0
+        )
+
+        dt = 0.1
+        proj.update(dt, terrain_grid)
+
+        # Normal drain only: 2.0 - 0.1 = 1.9
+        assert abs(proj.lifetime_remaining - 1.9) < 0.01
+
+    def test_forest_still_allows_collision(self):
+        """Projectile in forest still collides with agents (just shorter range)."""
+        proj = Projectile(
+            position=(10.0, 10.0),
+            velocity=(10.0, 0.0),
+            owner_team="blue",
+            shooter_id=1
+        )
+
+        enemy = Agent(position=(10.2, 10.0), orientation=0.0, team="red")
+
+        # Forest affects range (lifetime), not collision detection
+        assert proj.check_collision(enemy) == True
 
 
 if __name__ == "__main__":
