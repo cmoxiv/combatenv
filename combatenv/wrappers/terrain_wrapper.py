@@ -198,7 +198,7 @@ class TerrainWrapper(BaseWrapper):
                 if agent.health <= 0:
                     agent.health = 0
                     if old_health > 0:
-                        print(f"DEBUG: Agent died from FIRE at cell ({cell_x}, {cell_y}), pos {agent.position}")
+                        pass
             elif terrain == TerrainType.FOREST:
                 agent.in_forest = True
             elif terrain == TerrainType.WATER:

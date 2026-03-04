@@ -2,15 +2,19 @@
 Map Editor for Combat Environment.
 
 A standalone pygame application for creating and editing terrain maps.
-Maps are saved as JSON files that can be loaded into the simulation.
+Maps are saved as compressed .npz files that can be loaded into the simulation.
+Supports pixel-level painting with variable brush sizes and procedural terrain generation.
 
 Controls:
     Mouse:
         Left click/drag: Paint selected terrain
         Right click/drag: Erase (paint Empty)
+        Scroll wheel: Adjust brush size
 
     Keyboard:
         1-5: Select terrain type (1=Empty, 2=Obstacle, 3=Fire, 4=Forest, 5=Water)
+        [ / ]: Decrease / increase brush size
+        R: Generate random terrain
         S: Save map
         L: Load map
         C: Clear map
@@ -18,7 +22,7 @@ Controls:
         Q (Shift+Q): Quit
 
 Usage:
-    python map_editor.py
+    combatenv-edit-terrain
 """
 
 # Import tkinter BEFORE pygame to avoid macOS rendering issues
@@ -28,8 +32,10 @@ try:
 except ImportError:
     HAS_TKINTER = False
 
+import random
+
+import numpy as np
 import pygame
-import sys
 import subprocess
 import platform
 
@@ -149,8 +155,14 @@ def _native_open_dialog() -> str:
 from combatenv import TerrainGrid, TerrainType, save_map, load_map
 from combatenv.config import (
     GRID_SIZE, CELL_SIZE, WINDOW_SIZE,
-    COLOR_OBSTACLE, COLOR_FIRE, COLOR_FOREST, COLOR_WATER
+    COLOR_BACKGROUND as _CFG_COLOR_BACKGROUND,
+    COLOR_OBSTACLE, COLOR_FIRE, COLOR_FOREST, COLOR_WATER,
 )
+from combatenv.renderer import (
+    render_water_depth, render_forest_depth,
+    render_lava_variation, render_mountain_elevation,
+)
+import combatenv.renderer as _renderer
 
 
 # Editor configuration
@@ -158,19 +170,28 @@ PALETTE_WIDTH = 100
 EDITOR_WIDTH = PALETTE_WIDTH + WINDOW_SIZE
 EDITOR_HEIGHT = WINDOW_SIZE
 
-# Colors
-COLOR_BACKGROUND = (240, 240, 240)
+BRUSH_SIZES = [2, 4, 8, 16, 32]
+
+# Color lookup table for pixel-level surfarray rendering (indexed by TerrainType)
+COLOR_LUT = np.array([
+    _CFG_COLOR_BACKGROUND,  # EMPTY
+    COLOR_OBSTACLE,
+    COLOR_FIRE,
+    COLOR_FOREST,
+    COLOR_WATER,
+], dtype=np.uint8)
+
+# UI Colors
 COLOR_GRID = (200, 200, 200)
-COLOR_EMPTY = (255, 255, 255)
 COLOR_PALETTE_BG = (50, 50, 50)
 COLOR_SELECTED = (255, 255, 0)
 COLOR_TEXT = (255, 255, 255)
 COLOR_BUTTON = (80, 80, 80)
 COLOR_BUTTON_HOVER = (100, 100, 100)
 
-# Terrain palette
+# Terrain palette (button colors)
 TERRAIN_COLORS = {
-    TerrainType.EMPTY: COLOR_EMPTY,
+    TerrainType.EMPTY: _CFG_COLOR_BACKGROUND,
     TerrainType.OBSTACLE: COLOR_OBSTACLE,
     TerrainType.FIRE: COLOR_FIRE,
     TerrainType.FOREST: COLOR_FOREST,
@@ -196,10 +217,19 @@ class MapEditor:
         self.screen = pygame.display.set_mode((EDITOR_WIDTH, EDITOR_HEIGHT))
         self.clock = pygame.time.Clock()
 
+        # Offscreen surface for pixel-level terrain rendering
+        self.terrain_surface = pygame.Surface((WINDOW_SIZE, WINDOW_SIZE))
+
         self.terrain_grid = TerrainGrid(GRID_SIZE, GRID_SIZE)
         self.selected_terrain = TerrainType.OBSTACLE
         self.show_grid = True
         self.running = True
+
+        # Brush state
+        self.brush_size_index = 2  # Start at 8px radius
+        self.brush_radius = BRUSH_SIZES[self.brush_size_index]
+        self._scroll_accum = 0.0
+        self._reseed_brush_noise()
 
         self.font = pygame.font.Font(None, 24)
         self.small_font = pygame.font.Font(None, 18)
@@ -231,7 +261,7 @@ class MapEditor:
         y += 20  # Extra spacing before action buttons
 
         # Action buttons
-        for action in ["Save", "Load", "Clear"]:
+        for action in ["Generate", "Save", "Load", "Clear"]:
             self.action_buttons[action] = pygame.Rect(
                 10, y, button_width, button_height
             )
@@ -256,7 +286,22 @@ class MapEditor:
                 self._handle_keydown(event)
 
             elif event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button in (1, 3):
+                    self._reseed_brush_noise()
                 self._handle_mouse_click(event)
+
+            elif event.type == pygame.MOUSEBUTTONUP:
+                if event.button in (1, 3):
+                    self._invalidate_overlays()
+
+            elif event.type == pygame.MOUSEWHEEL:
+                self._scroll_accum += event.y
+                if self._scroll_accum >= 1.0:
+                    self._change_brush_size(1)
+                    self._scroll_accum = 0.0
+                elif self._scroll_accum <= -1.0:
+                    self._change_brush_size(-1)
+                    self._scroll_accum = 0.0
 
         # Handle continuous painting while mouse is held
         mouse_buttons = pygame.mouse.get_pressed()
@@ -272,6 +317,9 @@ class MapEditor:
         elif event.key == pygame.K_g:
             self.show_grid = not self.show_grid
 
+        elif event.key == pygame.K_r:
+            self._generate_terrain()
+
         elif event.key == pygame.K_s:
             self._save_map()
 
@@ -280,6 +328,12 @@ class MapEditor:
 
         elif event.key == pygame.K_c:
             self.terrain_grid.clear()
+            self._invalidate_overlays()
+
+        elif event.key == pygame.K_LEFTBRACKET:
+            self._change_brush_size(-1)
+        elif event.key == pygame.K_RIGHTBRACKET:
+            self._change_brush_size(1)
 
         # Number keys for terrain selection
         elif event.key == pygame.K_1:
@@ -306,12 +360,15 @@ class MapEditor:
         # Check action buttons
         for action, rect in self.action_buttons.items():
             if rect.collidepoint(mouse_pos):
-                if action == "Save":
+                if action == "Generate":
+                    self._generate_terrain()
+                elif action == "Save":
                     self._save_map()
                 elif action == "Load":
                     self._load_map()
                 elif action == "Clear":
                     self.terrain_grid.clear()
+                    self._invalidate_overlays()
                 return
 
         # Paint on grid
@@ -320,21 +377,72 @@ class MapEditor:
         elif event.button == 3:  # Right click
             self._paint_at_position(mouse_pos, erase=True)
 
-    def _paint_at_position(self, mouse_pos, erase=False):
-        """Paint terrain at mouse position."""
-        x, y = mouse_pos
+    def _invalidate_overlays(self):
+        """Mark all renderer overlay caches as dirty so they rebuild."""
+        _renderer._WATER_DEPTH_DIRTY = True
+        _renderer._FOREST_DEPTH_DIRTY = True
+        _renderer._LAVA_DIRTY = True
+        _renderer._MOUNTAIN_DIRTY = True
 
-        # Check if in grid area
-        if x < PALETTE_WIDTH:
+    def _reseed_brush_noise(self):
+        """Generate a Perlin noise field used for organic brush edges."""
+        # Sample at 256x256, upscale 4x to 1024x1024
+        small = WINDOW_SIZE // 4
+        try:
+            field = TerrainGrid._sample_noise(
+                small, seed=random.randint(0, 65535),
+                scale=12.0, octaves=3, persistence=0.5, lacunarity=2.0,
+            )
+        except ImportError:
+            field = np.random.default_rng().uniform(
+                -0.5, 0.5, (small, small)
+            ).astype(np.float32)
+        full = np.kron(field, np.ones((4, 4), dtype=np.float32))
+        # Normalize to 0..1
+        nmin, nmax = float(full.min()), float(full.max())
+        if nmax - nmin < 1e-6:
+            nmax = nmin + 1.0
+        self._brush_noise = (full - nmin) / (nmax - nmin)
+
+    def _change_brush_size(self, direction):
+        """Change brush size by stepping through BRUSH_SIZES."""
+        self.brush_size_index = max(0, min(len(BRUSH_SIZES) - 1,
+                                           self.brush_size_index + direction))
+        self.brush_radius = BRUSH_SIZES[self.brush_size_index]
+
+    def _generate_terrain(self):
+        """Generate random terrain using Perlin noise."""
+        self.terrain_grid = TerrainGrid(GRID_SIZE, GRID_SIZE)
+        self.terrain_grid.generate_random(rng=random.Random())
+        self._invalidate_overlays()
+
+    def _paint_at_position(self, mouse_pos, erase=False):
+        """Paint terrain using a Perlin noise-masked brush for organic edges."""
+        mx, my = mouse_pos
+
+        if mx < PALETTE_WIDTH:
             return
 
-        # Convert to grid coordinates
-        grid_x = (x - PALETTE_WIDTH) // CELL_SIZE
-        grid_y = y // CELL_SIZE
+        px = mx - PALETTE_WIDTH
+        py = my
+        terrain = TerrainType.EMPTY if erase else self.selected_terrain
+        r = self.brush_radius
+        grid = self.terrain_grid
+        noise = self._brush_noise
 
-        if 0 <= grid_x < GRID_SIZE and 0 <= grid_y < GRID_SIZE:
-            terrain = TerrainType.EMPTY if erase else self.selected_terrain
-            self.terrain_grid.set(grid_x, grid_y, terrain)
+        for dy in range(-r, r + 1):
+            for dx in range(-r, r + 1):
+                tx, ty = px + dx, py + dy
+                if not (0 <= tx < WINDOW_SIZE and 0 <= ty < WINDOW_SIZE):
+                    continue
+                # Chebyshev distance, normalized 0..1
+                dist = max(abs(dx), abs(dy)) / r
+                if dist > 1.0:
+                    continue
+                # Threshold rises toward edge: center always paints, edge is noisy
+                threshold = dist * dist
+                if noise[tx, ty] > threshold:
+                    grid.set_pixel(tx, ty, terrain)
 
     def _save_map(self):
         """Save the current map to a file."""
@@ -376,28 +484,36 @@ class MapEditor:
 
         try:
             self.terrain_grid = load_map(filepath)
+            self._invalidate_overlays()
             print(f"Map loaded from: {filepath}")
         except Exception as e:
             print(f"Error loading map: {e}")
 
     def _render(self):
         """Render the editor."""
-        # Clear screen
-        self.screen.fill(COLOR_BACKGROUND)
-
         # Render palette
         self._render_palette()
 
-        # Render grid area
+        # Render terrain via surfarray
         self._render_terrain()
 
         if self.show_grid:
             self._render_grid_lines()
 
+        # Render brush cursor
+        self._render_brush_cursor()
+
         # Render instructions
         self._render_instructions()
 
         pygame.display.flip()
+
+    def _render_brush_cursor(self):
+        """Draw a circle at the mouse position showing the brush size."""
+        mx, my = pygame.mouse.get_pos()
+        if mx > PALETTE_WIDTH:
+            pygame.draw.circle(self.screen, (255, 255, 255), (mx, my),
+                               self.brush_radius, 1)
 
     def _render_palette(self):
         """Render the terrain palette."""
@@ -442,20 +558,14 @@ class MapEditor:
             self.screen.blit(text, text_rect)
 
     def _render_terrain(self):
-        """Render the terrain grid."""
-        for x in range(GRID_SIZE):
-            for y in range(GRID_SIZE):
-                terrain = self.terrain_grid.get(x, y)
-                color = TERRAIN_COLORS.get(terrain, COLOR_EMPTY)
-
-                pixel_x = PALETTE_WIDTH + x * CELL_SIZE
-                pixel_y = y * CELL_SIZE
-
-                pygame.draw.rect(
-                    self.screen,
-                    color,
-                    (pixel_x, pixel_y, CELL_SIZE, CELL_SIZE)
-                )
+        """Render the terrain grid at pixel level with color variation overlays."""
+        rgb = COLOR_LUT[self.terrain_grid.grid]
+        pygame.surfarray.blit_array(self.terrain_surface, rgb)
+        render_water_depth(self.terrain_surface, self.terrain_grid)
+        render_forest_depth(self.terrain_surface, self.terrain_grid)
+        render_lava_variation(self.terrain_surface, self.terrain_grid)
+        render_mountain_elevation(self.terrain_surface, self.terrain_grid)
+        self.screen.blit(self.terrain_surface, (PALETTE_WIDTH, 0))
 
     def _render_grid_lines(self):
         """Render grid lines."""
@@ -479,11 +589,14 @@ class MapEditor:
             )
 
     def _render_instructions(self):
-        """Render keyboard shortcuts at bottom of palette."""
+        """Render keyboard shortcuts and brush info at bottom of palette."""
         instructions = [
+            f"Brush: {self.brush_radius}px",
+            "",
+            "R: Generate",
+            "[/]: Brush size",
             "1-5: Terrain",
-            "S: Save",
-            "L: Load",
+            "S/L: Save/Load",
             "C: Clear",
             "G: Grid",
             "Q: Quit",
@@ -491,7 +604,8 @@ class MapEditor:
 
         y = EDITOR_HEIGHT - len(instructions) * 18 - 10
         for line in instructions:
-            text = self.small_font.render(line, True, (180, 180, 180))
+            color = (255, 255, 0) if line.startswith("Brush:") else (180, 180, 180)
+            text = self.small_font.render(line, True, color)
             self.screen.blit(text, (10, y))
             y += 18
 

@@ -5,8 +5,9 @@ This module demonstrates the Gymnasium-compatible environment with random
 agent control for testing purposes.
 
 Usage:
-    source ~/.venvs/pg/bin/activate
-    python main.py
+    combatenv-demo
+    combatenv-demo --seed 42
+    combatenv-demo --map my_map.npz
 
 Controls:
     - ESC: Exit simulation
@@ -16,8 +17,9 @@ Controls:
     - ? (shift+/): Toggle keybindings help
 """
 
+import argparse
 import sys
-from combatenv import GridWorld
+from combatenv import GridWorld, load_map
 from combatenv.wrappers import (
     AgentWrapper,
     TeamWrapper,
@@ -65,17 +67,22 @@ def main():
     Demonstrates the Gymnasium environment interface with visualization.
     The controlled agent takes random actions while other agents act autonomously.
     """
+    parser = argparse.ArgumentParser(description="Combat environment demo")
+    parser.add_argument("--map", type=str, default=None, help="Path to a .npz map file")
+    parser.add_argument("--seed", type=int, default=None, help="Random seed for terrain generation")
+    args = parser.parse_args()
+
+    # Build reset options
+    reset_options = {}
+    if args.map:
+        reset_options["terrain_grid"] = load_map(args.map)
+    seed = args.seed if args.seed is not None else 42
+
     # Create environment with wrapper stack
     env = create_visual_env(max_steps=2000)
 
     # Reset environment
-    observation, info = env.reset(seed=42)
-    blue_alive = info.get('blue_alive', NUM_AGENTS_PER_TEAM)
-    red_alive = info.get('red_alive', NUM_AGENTS_PER_TEAM)
-    print(f"Environment created with {blue_alive} blue and {red_alive} red agents")
-    print(f"Observation shape: {observation.shape}")
-    print(f"Action space: {env.action_space}")
-
+    observation, info = env.reset(seed=seed, options=reset_options or None)
     episode = 0
     total_reward = 0.0
 
@@ -96,25 +103,10 @@ def main():
         # Handle episode end
         if terminated or truncated:
             episode += 1
-            reason = "terminated" if terminated else "truncated"
-            step_count = info.get('step_count', 0)
-            blue_kills = info.get('blue_kills', 0)
-            red_kills = info.get('red_kills', 0)
-            blue_alive = info.get('blue_alive', 0)
-            red_alive = info.get('red_alive', 0)
-
-            print(f"Episode {episode} {reason} at step {step_count}")
-            print(f"  Total reward: {total_reward:.2f}")
-            print(f"  Blue kills: {blue_kills}, Red kills: {red_kills}")
-            print(f"  Blue alive: {blue_alive}, Red alive: {red_alive}")
-
-            # Reset for next episode
             total_reward = 0.0
-            observation, info = env.reset()
+            observation, info = env.reset(seed=seed, options=reset_options or None)
 
-    # Cleanup
     env.close()
-    print(f"\nSimulation ended after {episode} episodes")
     sys.exit()
 
 

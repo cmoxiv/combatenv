@@ -461,7 +461,7 @@ class Agent:
         old_health = self.health
         self.health = max(0, self.health - damage)
         if self.health <= 0 and old_health > 0:
-            print(f"DEBUG: Agent died from terrain damage at {self.position}")
+            pass
 
     def take_damage(self, damage: int) -> None:
         """
@@ -489,7 +489,7 @@ class Agent:
             self.health = max(0, self.health - damage)
 
         if self.health <= 0 and old_health > 0:
-            print(f"DEBUG: Agent died from take_damage (projectile?) at {self.position}")
+            pass
 
     def update_cooldown(self, dt: float) -> None:
         """

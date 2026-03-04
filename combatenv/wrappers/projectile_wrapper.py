@@ -140,7 +140,7 @@ class ProjectileWrapper(BaseWrapper):
                 if hit_agent.health <= 0:
                     hit_agent.health = 0
                     if old_health > 0:
-                        print(f"DEBUG: Agent died from projectile at {hit_agent.position}")
+                        pass
                 hits.append((projectile, hit_agent))
             else:
                 # Update position and check expiration

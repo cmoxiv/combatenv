@@ -14,5 +14,10 @@ dependencies = [
     "pygame",
 ]
 
+[project.scripts]
+combatenv-demo = "combatenv.demo:main"
+combatenv-preview-terrain = "combatenv.preview_terrain:main"
+combatenv-edit-terrain = "combatenv.map_editor:main"
+
 [tool.setuptools.packages.find]
 include = ["combatenv*"]

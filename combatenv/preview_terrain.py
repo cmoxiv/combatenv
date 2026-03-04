@@ -2,15 +2,22 @@
 Standalone terrain preview script.
 
 Generates terrain and displays it in a pygame window.
-Press SPACE to regenerate with a new seed.
-Press Q to quit.
+
+Controls:
+    SPACE: Regenerate with a new random seed
+    S: Set a specific seed (type in terminal)
+    C / Cmd+C / Ctrl+C: Copy current seed to clipboard
+    Q: Quit
 
 Usage:
-    python preview_terrain.py
-    python preview_terrain.py --seed 42
+    combatenv-preview-terrain
+    combatenv-preview-terrain --seed 42
 """
 
 import argparse
+import platform
+import subprocess
+
 import numpy as np
 import pygame
 
@@ -19,6 +26,11 @@ from combatenv.config import (
     WINDOW_SIZE, GRID_SIZE,
     COLOR_BACKGROUND, COLOR_OBSTACLE, COLOR_FIRE, COLOR_FOREST, COLOR_WATER,
 )
+from combatenv.renderer import (
+    render_water_depth, render_forest_depth,
+    render_lava_variation, render_mountain_elevation,
+)
+import combatenv.renderer as _renderer
 
 
 TERRAIN_NAMES = {
@@ -58,16 +70,20 @@ def compute_stats(grid: TerrainGrid) -> dict:
 
 
 def render_terrain(surface: pygame.Surface, grid: TerrainGrid) -> None:
-    """Render terrain at pixel level using surfarray."""
+    """Render terrain at pixel level using surfarray with color variation overlays."""
     rgb = COLOR_LUT[grid.grid]
     pygame.surfarray.blit_array(surface, rgb)
+    render_water_depth(surface, grid)
+    render_forest_depth(surface, grid)
+    render_lava_variation(surface, grid)
+    render_mountain_elevation(surface, grid)
 
 
 def render_stats_overlay(surface: pygame.Surface, stats: dict, seed_val: int) -> None:
     """Render terrain distribution stats as overlay text."""
     font = pygame.font.Font(None, 24)
     panel_width = 220
-    panel_height = 180
+    panel_height = 200
     panel = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
     panel.fill((0, 0, 0, 180))
 
@@ -89,10 +105,28 @@ def render_stats_overlay(surface: pygame.Surface, stats: dict, seed_val: int) ->
 
     # Controls hint
     y += 4
-    hint = pygame.font.Font(None, 20).render("SPACE=regen  Q=quit", True, (150, 150, 150))
-    panel.blit(hint, (10, y))
+    hint_font = pygame.font.Font(None, 20)
+    for hint_line in ["SPACE=regen  S=seed", "C=copy seed  Q=quit"]:
+        hint = hint_font.render(hint_line, True, (150, 150, 150))
+        panel.blit(hint, (10, y))
+        y += 16
 
     surface.blit(panel, (10, 10))
+
+
+def copy_to_clipboard(text: str) -> None:
+    """Copy text to system clipboard (cross-platform)."""
+    system = platform.system()
+    try:
+        if system == "Darwin":
+            subprocess.run(["pbcopy"], input=text.encode(), check=True)
+        elif system == "Linux":
+            subprocess.run(["xclip", "-selection", "clipboard"],
+                           input=text.encode(), check=True)
+        elif system == "Windows":
+            subprocess.run(["clip"], input=text.encode(), check=True)
+    except Exception:
+        pass
 
 
 def main():
@@ -108,11 +142,24 @@ def main():
     import random
     seed_val = args.seed if args.seed is not None else random.randint(0, 99999)
 
+    def invalidate_overlays():
+        _renderer._WATER_DEPTH_DIRTY = True
+        _renderer._FOREST_DEPTH_DIRTY = True
+        _renderer._LAVA_DIRTY = True
+        _renderer._MOUNTAIN_DIRTY = True
+
+    def generate(seed):
+        nonlocal grid, stats
+        rng = random.Random(seed)
+        grid = TerrainGrid(GRID_SIZE, GRID_SIZE)
+        grid.generate_random(rng=rng)
+        stats = compute_stats(grid)
+        invalidate_overlays()
+
     # Generate initial terrain
-    grid = TerrainGrid(GRID_SIZE, GRID_SIZE)
-    rng = random.Random(seed_val)
-    grid.generate_random(rng=rng)
-    stats = compute_stats(grid)
+    grid = None
+    stats = {}
+    generate(seed_val)
 
     running = True
     while running:
@@ -122,12 +169,24 @@ def main():
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_q:
                     running = False
+
                 elif event.key == pygame.K_SPACE:
                     seed_val = random.randint(0, 99999)
-                    rng = random.Random(seed_val)
-                    grid = TerrainGrid(GRID_SIZE, GRID_SIZE)
-                    grid.generate_random(rng=rng)
-                    stats = compute_stats(grid)
+                    generate(seed_val)
+
+                elif event.key == pygame.K_s:
+                    # Prompt for seed in terminal
+                    try:
+                        raw = input(f"Enter seed (current: {seed_val}): ").strip()
+                        if raw:
+                            seed_val = int(raw)
+                            generate(seed_val)
+                    except (ValueError, EOFError):
+                        pass
+
+                elif event.key == pygame.K_c:
+                    copy_to_clipboard(str(seed_val))
+                    pygame.display.set_caption(f"Terrain Preview — Seed {seed_val} copied")
 
         render_terrain(screen, grid)
         render_stats_overlay(screen, stats, seed_val)
