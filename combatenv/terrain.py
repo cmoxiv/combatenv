@@ -291,17 +291,13 @@ class TerrainGrid:
         Returns:
             (size, size) float32 array of noise values
         """
-        import noise as _noise
+        from vnoise import Noise
 
-        field = np.empty((size, size), dtype=np.float32)
-        for x in range(size):
-            for y in range(size):
-                field[x, y] = _noise.pnoise2(
-                    (x + seed) / scale, (y + seed) / scale,
-                    octaves=octaves, persistence=persistence,
-                    lacunarity=lacunarity
-                )
-        return field
+        gen = Noise()
+        coords = (np.arange(size, dtype=np.float64) + seed) / scale
+        field = gen.noise2(coords, coords, octaves=octaves,
+                           persistence=persistence, lacunarity=lacunarity)
+        return field.astype(np.float32)
 
     def generate_random(
         self,

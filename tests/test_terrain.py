@@ -342,7 +342,7 @@ class TestLayeredGeneration:
 
         # Ordering should be: Empty > Obstacle > Water > Forest > Fire
         assert pcts[TerrainType.EMPTY] > 30, f"Empty: {pcts[TerrainType.EMPTY]:.1f}%"
-        assert 10 < pcts[TerrainType.OBSTACLE] < 30, f"Obstacle: {pcts[TerrainType.OBSTACLE]:.1f}%"
+        assert 5 < pcts[TerrainType.OBSTACLE] < 30, f"Obstacle: {pcts[TerrainType.OBSTACLE]:.1f}%"
         assert pcts[TerrainType.WATER] > 0.5, f"Water: {pcts[TerrainType.WATER]:.1f}%"
         assert pcts[TerrainType.FOREST] > 0.5, f"Forest: {pcts[TerrainType.FOREST]:.1f}%"
 

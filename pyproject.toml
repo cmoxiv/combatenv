@@ -9,7 +9,7 @@ description = "A Gymnasium-compatible multi-agent grid-world environment for com
 requires-python = ">=3.10"
 dependencies = [
     "gymnasium",
-    "noise",
+    "vnoise",
     "numpy",
     "pygame",
 ]
