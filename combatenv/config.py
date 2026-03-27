@@ -104,7 +104,7 @@ MOVEMENT_ACCURACY_PENALTY = 0.5  # Accuracy multiplier when moving (50% of base 
 # Combat Configuration - Projectiles
 PROJECTILE_SPEED = 15.0       # Grid cells per second
 PROJECTILE_DAMAGE = 25        # HP damage per hit
-PROJECTILE_RANGE = FAR_FOV_RANGE * 2  # Max distance = 2x far FOV range (10 cells)
+PROJECTILE_RANGE = FAR_FOV_RANGE      # Max distance = far FOV range (5 cells)
 PROJECTILE_LIFETIME = PROJECTILE_RANGE / PROJECTILE_SPEED  # Derived from range/speed
 PROJECTILE_RADIUS = 0.3       # Collision detection radius
 
@@ -113,23 +113,32 @@ AGENT_MAX_HEALTH = 100        # Maximum health points
 SHOOT_COOLDOWN = 0.5          # Seconds between shots
 FRIENDLY_FIRE_ENABLED = True  # Allow teammates to damage each other
 
-# Resource Management - Stamina
+# Resource Management - Stamina (rates per tactical step)
 AGENT_MAX_STAMINA = 100.0          # Maximum stamina points
-STAMINA_REGEN_RATE_IDLE = 20.0     # Stamina per second when not moving
-STAMINA_REGEN_RATE_MOVING = 5.0    # Stamina per second while moving
-STAMINA_DRAIN_RATE = 15.0          # Stamina consumed per second of movement
+STAMINA_DRAIN_RATE = 20.0         # Stamina consumed per step while moving
+STAMINA_REGEN_RATE_IDLE = STAMINA_DRAIN_RATE * 0.5    # 50% of drain rate when idle (7.5/step)
+STAMINA_REGEN_RATE_MOVING = STAMINA_DRAIN_RATE * 0.25  # 25% of drain rate when moving (3.75/step)
 LOW_STAMINA_THRESHOLD = 20.0       # Threshold for movement penalty
 MOVEMENT_SPEED_PENALTY_LOW_STAMINA = 0.5  # Speed multiplier at low stamina
+WATER_STAMINA_DRAIN_RATE = 0.12   # Stamina consumed per step while swimming (~20 cells total range)
+DROWN_HP_DRAIN_RATE = 1.0         # HP/step when stamina empty in water (100 steps to die)
 
-# Resource Management - Armor
+# Resource Management - Health (rates per tactical step)
+HEALTH_REGEN_RATE_IDLE = 10.0      # HP per step when idle
+HEALTH_REGEN_RATE_MOVING = 5.0     # HP per step when moving
+
+# Resource Management - Armor (rates per tactical step)
 AGENT_MAX_ARMOR = 100          # Maximum armor points
-ARMOR_REGEN_RATE = 0.0         # No regeneration (depleting resource)
+ARMOR_REGEN_RATE_IDLE = 10.0   # Armor per step when idle
+ARMOR_REGEN_RATE_MOVING = 5.0  # Armor per step when moving
 
-# Resource Management - Ammo
+# Resource Management - Ammo (rates per tactical step)
 AGENT_MAX_AMMO = 1000          # Total ammo reserve
 MAGAZINE_SIZE = 30             # Rounds per magazine
 RELOAD_TIME = 2.0              # Seconds to reload
 AUTO_RELOAD_ON_EMPTY = True    # Auto-reload when magazine empty
+AMMO_REGEN_RATE_IDLE = 10.0    # Ammo per step when idle
+AMMO_REGEN_RATE_MOVING = 5.0   # Ammo per step when moving
 
 # Combat Colors (RGB)
 COLOR_PROJECTILE_BLUE = (50, 50, 255)    # Light blue for blue projectiles
@@ -147,7 +156,7 @@ MUZZLE_FLASH_LIFETIME = 0.1   # Seconds the flash is visible
 RESPAWN_DELAY_SECONDS = 1.0
 
 # Terrain Configuration
-FIRE_DAMAGE_PER_STEP = 2        # HP per step in fire (bypasses armor)
+FIRE_DAMAGE_PER_STEP = 1        # HP per step in fire (bypasses armor, ~100 steps to die)
 TERRAIN_OBSTACLE_PCT = 0.10     # 10% of grid for obstacles
 
 # Operational Grid Configuration

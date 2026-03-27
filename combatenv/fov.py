@@ -288,12 +288,12 @@ def get_fov_cells(
 
             # Check if cell is within grid bounds
             if 0 <= cell_x < GRID_SIZE and 0 <= cell_y < GRID_SIZE:
+                visible_cells.add((cell_x, cell_y))
+
                 # Check if ray hits a building (blocks LOS)
                 if terrain_grid and terrain_grid.blocks_los(cell_x, cell_y):
-                    # Building blocks LOS - stop this ray
+                    # Building visible but blocks further LOS - stop this ray
                     break
-
-                visible_cells.add((cell_x, cell_y))
 
     return visible_cells
 

@@ -94,7 +94,7 @@ class MovementWrapper(BaseWrapper):
         # Update stamina for all agents
         alive_agents = getattr(self.env, 'alive_agents', [])
         for agent in alive_agents:
-            agent.update_stamina(dt, agent.is_moving)
+            agent.update_stamina(agent.is_moving)
 
         # Step base environment
         obs, reward, terminated, truncated, info = self.env.step(action)

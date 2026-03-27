@@ -15,13 +15,19 @@ Agent Capabilities:
 Resource Systems:
     Stamina:
         - Maximum: 100 points
-        - Drain: 15/sec while moving
-        - Regeneration: 20/sec idle, 5/sec while moving (net -10/sec moving)
+        - Drain: 15/sec while running
+        - Regeneration: 50% of drain rate idle (7.5/s), 25% moving (3.75/s)
+        - Swimming: drains at 10/s, no regeneration
+        - Drowning: when stamina reaches 0 in water, HP drains at 20/s until death
         - Low Stamina Penalty: 50% speed reduction below 20 stamina
+
+    Health:
+        - Maximum: 100 points
+        - Regeneration: 5 HP/sec
 
     Armor:
         - Maximum: 100 points
-        - Depleting resource (no regeneration)
+        - Regeneration: 10/sec idle, 5/sec moving
         - Absorbs damage before health
 
     Ammunition:
@@ -29,6 +35,7 @@ Resource Systems:
         - Magazine: 30 rounds per magazine
         - Reload Time: 2.0 seconds
         - Auto-reload: Triggers when magazine empties
+        - Reserve regeneration: 10/sec idle, 5/sec moving
 
 Combat Mechanics:
     - Two-layer FOV for target detection
@@ -78,11 +85,19 @@ from .config import (
     STAMINA_DRAIN_RATE,
     LOW_STAMINA_THRESHOLD,
     MOVEMENT_SPEED_PENALTY_LOW_STAMINA,
+    WATER_STAMINA_DRAIN_RATE,
+    DROWN_HP_DRAIN_RATE,
+    HEALTH_REGEN_RATE_IDLE,
+    HEALTH_REGEN_RATE_MOVING,
     AGENT_MAX_ARMOR,
+    ARMOR_REGEN_RATE_IDLE,
+    ARMOR_REGEN_RATE_MOVING,
     AGENT_MAX_AMMO,
     MAGAZINE_SIZE,
     RELOAD_TIME,
     AUTO_RELOAD_ON_EMPTY,
+    AMMO_REGEN_RATE_IDLE,
+    AMMO_REGEN_RATE_MOVING,
     FOREST_SPEED_MULTIPLIER,
     WATER_SPEED_MULTIPLIER,
 )
@@ -119,6 +134,7 @@ class Agent:
     # Terrain effects
     in_forest: bool = False  # Agent is in forest terrain (50% speed, reduced detection)
     in_water: bool = False   # Agent is in water terrain (50% speed, no shooting, invisible)
+    _drown_damage_accum: float = 0.0  # Accumulator for fractional drown damage
     # Unit membership
     unit_id: Optional[int] = None  # Which unit this agent belongs to
     following_unit: bool = True    # Whether agent is following unit waypoint
@@ -170,15 +186,8 @@ class Agent:
             new_cell_x = math.floor(new_x)
             new_cell_y = math.floor(new_y)
 
-            # Helper to check if position is safe (walkable and not fire)
             def is_safe(cx, cy):
-                if not terrain_grid.is_walkable(cx, cy):
-                    return False
-                # Also avoid fire terrain
-                from combatenv.terrain import TerrainType
-                if terrain_grid.get(cx, cy) == TerrainType.FIRE:
-                    return False
-                return True
+                return terrain_grid.is_walkable(cx, cy)
 
             if not is_safe(new_cell_x, new_cell_y):
                 # Bounce: determine which axis to reflect
@@ -596,25 +605,58 @@ class Agent:
 
         return projectile
 
-    def update_stamina(self, dt: float, is_moving: bool) -> None:
+    def update_stamina(self, is_moving: bool) -> None:
         """
-        Update stamina based on movement state.
+        Update stamina per tactical step.
+
+        In water: drains at WATER_STAMINA_DRAIN_RATE with no regen.
+        If stamina hits 0 in water, HP drains at DROWN_HP_DRAIN_RATE (drowning).
+        On land: drains while moving, regens at 50% of drain rate idle / 25% moving.
 
         Args:
-            dt: Delta time in seconds
-            is_moving: Whether agent moved this frame
+            is_moving: Whether agent moved this step
         """
-        if is_moving:
-            # Drain stamina while moving
-            self.stamina -= STAMINA_DRAIN_RATE * dt
-            # Regenerate at slower rate while moving
-            self.stamina += STAMINA_REGEN_RATE_MOVING * dt
+        if self.in_water:
+            # Swimming drains stamina, no regen
+            self.stamina -= WATER_STAMINA_DRAIN_RATE
+            self.stamina = max(0.0, self.stamina)
+            # Drown: no stamina left in water -> HP drain
+            if self.stamina <= 0:
+                self._drown_damage_accum += DROWN_HP_DRAIN_RATE
+                dmg = int(self._drown_damage_accum)
+                if dmg > 0:
+                    self.health = max(0, self.health - dmg)
+                    self._drown_damage_accum -= dmg
+        elif is_moving:
+            self._drown_damage_accum = 0.0
+            # Drain stamina while moving, regen at 25% of drain rate
+            self.stamina -= STAMINA_DRAIN_RATE
+            self.stamina += STAMINA_REGEN_RATE_MOVING
         else:
-            # Regenerate at full rate when idle
-            self.stamina += STAMINA_REGEN_RATE_IDLE * dt
+            self._drown_damage_accum = 0.0
+            # Regen at 50% of drain rate when idle
+            self.stamina += STAMINA_REGEN_RATE_IDLE
 
         # Clamp to valid range
         self.stamina = max(0.0, min(AGENT_MAX_STAMINA, self.stamina))
+
+    def update_health(self, is_moving: bool) -> None:
+        """Regenerate health per tactical step: 10/step idle, 5/step moving."""
+        if self.is_alive and self.health < AGENT_MAX_HEALTH:
+            rate = HEALTH_REGEN_RATE_MOVING if is_moving else HEALTH_REGEN_RATE_IDLE
+            self.health = min(AGENT_MAX_HEALTH, int(self.health + rate))
+
+    def update_armor(self, is_moving: bool) -> None:
+        """Regenerate armor per tactical step."""
+        if self.armor < AGENT_MAX_ARMOR:
+            rate = ARMOR_REGEN_RATE_MOVING if is_moving else ARMOR_REGEN_RATE_IDLE
+            self.armor = min(AGENT_MAX_ARMOR, int(self.armor + rate))
+
+    def update_ammo(self, is_moving: bool) -> None:
+        """Regenerate ammo reserve per tactical step."""
+        if self.ammo_reserve < AGENT_MAX_AMMO:
+            rate = AMMO_REGEN_RATE_MOVING if is_moving else AMMO_REGEN_RATE_IDLE
+            self.ammo_reserve = min(AGENT_MAX_AMMO, int(self.ammo_reserve + rate))
 
     def update_reload(self, dt: float) -> None:
         """
@@ -690,6 +732,7 @@ class Agent:
         self.shoot_cooldown = 0.0
         self.in_forest = False
         self.in_water = False
+        self._drown_damage_accum = 0.0
 
         # Move to spawn quadrant (use BOUNDARY_MARGIN for consistency)
         margin = BOUNDARY_MARGIN * 4  # Keep away from edges

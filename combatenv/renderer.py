@@ -293,6 +293,8 @@ def render_waypoints(
         show_waypoints: Whether to show intermediate waypoint lines (W key)
         show_goals: Whether to show goal waypoint lines (SHIFT+W key)
     """
+    # Render waypoint UI onto transparent overlay at 50% opacity
+    overlay = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
     font = pygame.font.Font(None, 20)
 
     for unit in units:
@@ -302,23 +304,23 @@ def render_waypoints(
         centroid = unit.centroid
         centroid_px = (int(centroid[0] * CELL_SIZE), int(centroid[1] * CELL_SIZE))
 
-        # Determine color based on team
+        # Determine color based on team (with 50% alpha)
         if unit.team == "blue":
-            base_color = (100, 100, 255)
-            waypoint_color = (0, 150, 255)
+            base_color = (100, 100, 255, 128)
+            waypoint_color = (0, 150, 255, 128)
         else:
-            base_color = (255, 100, 100)
-            waypoint_color = (255, 150, 0)
+            base_color = (255, 100, 100, 128)
+            waypoint_color = (255, 150, 0, 128)
 
         # Highlight selected unit
         is_selected = (selected_unit_id is not None and unit.id == selected_unit_id)
         if is_selected:
             if unit.team == "blue":
-                base_color = (135, 206, 250)  # Light blue for selected blue
-                waypoint_color = (135, 206, 250)
+                base_color = (135, 206, 250, 128)
+                waypoint_color = (135, 206, 250, 128)
             else:
-                base_color = (255, 165, 0)  # Orange for selected red
-                waypoint_color = (255, 165, 0)
+                base_color = (255, 165, 0, 128)
+                waypoint_color = (255, 165, 0, 128)
 
         # Draw unit ID at centroid (uppercase for blue, lowercase for red)
         if unit.team == "blue":
@@ -326,7 +328,7 @@ def render_waypoints(
         else:
             unit_label = f"u{unit.id}"
         text = font.render(unit_label, True, base_color)
-        surface.blit(text, (centroid_px[0] - 8, centroid_px[1] - 20))
+        overlay.blit(text, (centroid_px[0] - 8, centroid_px[1] - 20))
 
         # Draw goal waypoint (diamond shape) - toggled with SHIFT+W
         goal = getattr(unit, 'goal_waypoint', None)
@@ -334,23 +336,22 @@ def render_waypoints(
             goal_px = (int(goal[0] * CELL_SIZE), int(goal[1] * CELL_SIZE))
 
             # Draw dashed line from centroid to goal (use dots for dashed effect)
-            # Use same color as intermediate waypoint for consistency
             dx = goal_px[0] - centroid_px[0]
             dy = goal_px[1] - centroid_px[1]
             dist = max(1, int((dx**2 + dy**2)**0.5))
-            for i in range(0, dist, 12):  # Dashed line
+            for i in range(0, dist, 12):
                 t = i / dist
                 x = int(centroid_px[0] + dx * t)
                 y = int(centroid_px[1] + dy * t)
-                pygame.draw.circle(surface, waypoint_color, (x, y), 2)
+                pygame.draw.circle(overlay, waypoint_color, (x, y), 2)
 
             # Draw goal marker (diamond shape)
             size = 10
-            pygame.draw.polygon(surface, waypoint_color, [
-                (goal_px[0], goal_px[1] - size),      # Top
-                (goal_px[0] + size, goal_px[1]),      # Right
-                (goal_px[0], goal_px[1] + size),      # Bottom
-                (goal_px[0] - size, goal_px[1]),      # Left
+            pygame.draw.polygon(overlay, waypoint_color, [
+                (goal_px[0], goal_px[1] - size),
+                (goal_px[0] + size, goal_px[1]),
+                (goal_px[0], goal_px[1] + size),
+                (goal_px[0] - size, goal_px[1]),
             ], 3)
 
             # Draw goal label (uppercase for blue, lowercase for red)
@@ -359,23 +360,25 @@ def render_waypoints(
             else:
                 goal_label = f"g{unit.id}"
             goal_text = font.render(goal_label, True, waypoint_color)
-            surface.blit(goal_text, (goal_px[0] + 12, goal_px[1] - 12))
+            overlay.blit(goal_text, (goal_px[0] + 12, goal_px[1] - 12))
 
         # Draw intermediate waypoint if set (X shape) - toggled with W
         if unit.waypoint is not None and show_waypoints:
             wp_px = (int(unit.waypoint[0] * CELL_SIZE), int(unit.waypoint[1] * CELL_SIZE))
 
             # Draw solid line from centroid to intermediate waypoint
-            pygame.draw.line(surface, waypoint_color, centroid_px, wp_px, 2)
+            pygame.draw.line(overlay, waypoint_color, centroid_px, wp_px, 2)
 
             # Draw waypoint marker (X shape)
             size = 6
-            pygame.draw.line(surface, waypoint_color,
+            pygame.draw.line(overlay, waypoint_color,
                            (wp_px[0] - size, wp_px[1] - size),
                            (wp_px[0] + size, wp_px[1] + size), 2)
-            pygame.draw.line(surface, waypoint_color,
+            pygame.draw.line(overlay, waypoint_color,
                            (wp_px[0] + size, wp_px[1] - size),
                            (wp_px[0] - size, wp_px[1] + size), 2)
+
+    surface.blit(overlay, (0, 0))
 
 
 def render_selected_unit(

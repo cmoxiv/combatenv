@@ -353,7 +353,10 @@ class TacticalCombatEnv(gym.Env):
         for agent in self.alive_agents:
             agent.update_cooldown(dt)
             agent.update_reload(dt)
-            agent.update_stamina(dt, agent.is_moving)
+            agent.update_stamina(agent.is_moving)
+            agent.update_health(agent.is_moving)
+            agent.update_armor(agent.is_moving)
+            agent.update_ammo(agent.is_moving)
 
         # Handle respawning (if enabled)
         if self.config.respawn_enabled:

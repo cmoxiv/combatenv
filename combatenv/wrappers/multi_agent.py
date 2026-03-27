@@ -128,7 +128,7 @@ class MultiAgentWrapper(gym.Wrapper):
         for agent in self._base_env.alive_agents:
             agent.update_cooldown(dt)
             agent.update_reload(dt)
-            agent.update_stamina(dt, agent.is_moving)
+            agent.update_stamina(agent.is_moving)
 
         # Phase 3: Apply actions to ALL agents (tracks friendly collisions)
         rewards = {idx: 0.0 for idx in range(self.num_agents)}

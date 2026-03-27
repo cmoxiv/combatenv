@@ -584,3 +584,19 @@ Two-part session: ported pixel-level terrain rendering from the teaching SSS vis
 - Run full test suite to validate new projectile-terrain interactions
 - Consider adding terrain interaction effects for other terrain types (swamp, etc.)
 - Commit terrain rendering and projectile interaction changes
+
+## 2026-03-23 — Standup
+
+**Branch:** main
+
+### Completed
+- No commits in the last 24 hours
+
+### In Progress
+- No active code changes (only `.bash_history` modified)
+
+### Blockers
+- None
+
+### Next Steps
+- Ready for new work
